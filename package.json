@@ -1,0 +1,13 @@
+{
+  "name": "aurex-market-research",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aurex is a live market research and portfolio simulation platform.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check app.js"
+  }
+}

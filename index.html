@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aurex | Intelligent Market Research</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body data-page="home">
+    <main class="landing-page">
+      <nav class="landing-nav">
+        <a class="brand brand-link" href="/" aria-label="Aurex home">
+          <span class="brand-mark">AX</span>
+          <span>
+            <strong>Aurex</strong>
+            <small>Research Platform</small>
+          </span>
+        </a>
+        <div class="landing-nav-actions">
+          <button class="theme-toggle compact" id="themeToggle" type="button">Theme</button>
+          <a class="button secondary" href="/app">Open App</a>
+        </div>
+      </nav>
+
+      <section class="hero-section">
+        <div class="hero-copy">
+          <p class="eyebrow">Premium market intelligence</p>
+          <h1>A clearer way to research investments and understand portfolio fit.</h1>
+          <p class="hero-subtitle">Aurex combines live market data, weighted fundamentals, news sentiment, and portfolio-aware recommendations in one clean workspace.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="/app">Launch Platform</a>
+            <a class="button ghost" href="#preview">View Live Preview</a>
+          </div>
+          <div class="hero-proof">
+            <span>Live or delayed provider data</span>
+            <span>Confidence-aware verdicts</span>
+            <span>No fake numbers</span>
+          </div>
+        </div>
+        <aside class="hero-terminal" aria-label="Aurex platform summary">
+          <div class="terminal-header">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="terminal-grid">
+            <div>
+              <small>Weighted Score</small>
+              <strong id="landingScore">--/100</strong>
+            </div>
+            <div>
+              <small>Verdict</small>
+              <strong id="landingVerdict">Loading</strong>
+            </div>
+            <div>
+              <small>Confidence</small>
+              <strong id="landingConfidence">--</strong>
+            </div>
+            <div>
+              <small>Provider</small>
+              <strong id="landingProvider">Connecting</strong>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="value-section">
+        <article class="feature-card">
+          <span class="feature-icon">RT</span>
+          <h2>Real-Time Market Intelligence</h2>
+          <p>Search across provider-supported assets, inspect quotes, ranges, volume, news, and fundamentals, and see exactly when data was last updated.</p>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon">PR</span>
+          <h2>Portfolio-Aware Recommendations</h2>
+          <p>Aurex separates standalone quality from portfolio fit, so a strong asset can still be flagged as a Hold when it increases concentration risk.</p>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon">DS</span>
+          <h2>Diversification Scoring</h2>
+          <p>Understand sector balance, position concentration, asset-type mix, and risk alignment in plain English before making simulated allocation choices.</p>
+        </article>
+      </section>
+
+      <section class="preview-section" id="preview">
+        <div>
+          <p class="eyebrow">Live preview</p>
+          <h2>One asset, explained simply.</h2>
+          <p class="section-copy">This example card uses the same API and scoring engine as the main platform. If a provider does not return a field, Aurex says so.</p>
+        </div>
+        <article class="preview-card loading" id="landingPreview">
+          <div class="preview-card-header">
+            <div>
+              <span id="previewSymbol">AAPL</span>
+              <h3 id="previewName">Loading Apple...</h3>
+            </div>
+            <strong class="verdict-badge hold" id="previewVerdict">Hold</strong>
+          </div>
+          <div class="preview-price">
+            <strong id="previewPrice">Unavailable</strong>
+            <span id="previewMove">Daily move unavailable</span>
+          </div>
+          <p id="previewExplanation">Connecting to the market data provider.</p>
+          <a class="button secondary" href="/app">Analyze More Assets</a>
+        </article>
+      </section>
+
+      <section class="advantage-section">
+        <div>
+          <p class="eyebrow">Why it feels different</p>
+          <h2>Built for explanation, not just data dumps.</h2>
+        </div>
+        <div class="advantage-grid">
+          <p><strong>Clearer analysis:</strong> each verdict cites the strongest and weakest scoring factors.</p>
+          <p><strong>Portfolio personalization:</strong> recommendations adapt to cash, risk tolerance, horizon, and concentration.</p>
+          <p><strong>Stronger scoring logic:</strong> financial strength, valuation, growth, profitability, risk, and news are weighted separately.</p>
+          <p><strong>Simpler reasoning:</strong> missing fields lower confidence instead of being filled with pretend values.</p>
+        </div>
+      </section>
+
+      <footer class="landing-footer">
+        <p>This platform is for educational and informational purposes only. It does not guarantee investment results and should not be treated as professional financial advice. Users should do their own research before making real investment decisions.</p>
+      </footer>
+    </main>
+  </body>
+</html>
