@@ -65,36 +65,13 @@
               <span id="marketState">Status unknown</span>
             </div>
           </div>
+          <nav class="mobile-tabs nav-tabs" aria-label="Mobile primary">
+            <button class="nav-tab active" data-tab="analysis" type="button">Analysis</button>
+            <button class="nav-tab" data-tab="comparison" type="button">Compare</button>
+            <button class="nav-tab" data-tab="portfolio" type="button">Portfolio</button>
+            <button class="nav-tab" data-tab="data" type="button">Data</button>
+          </nav>
         </header>
-
-        <section class="search-panel">
-          <form id="searchForm" class="search-form">
-            <label for="assetSearch">Search the market universe</label>
-            <div class="search-row">
-              <input id="assetSearch" autocomplete="off" placeholder="Ticker, company, ETF, crypto, sector, exchange..." />
-              <button type="submit">Search</button>
-            </div>
-            <div class="filter-row">
-              <select id="assetTypeFilter" aria-label="Asset type filter">
-                <option value="">All asset types</option>
-                <option value="EQUITY">Stocks</option>
-                <option value="ETF">ETFs</option>
-                <option value="MUTUALFUND">Index funds</option>
-                <option value="REIT">REITs</option>
-                <option value="CRYPTOCURRENCY">Crypto</option>
-                <option value="INDEX">Indexes</option>
-              </select>
-              <input id="sectorFilter" placeholder="Sector filter" />
-              <input id="exchangeFilter" placeholder="Exchange filter" />
-            </div>
-            <div id="searchMessage" class="form-message" aria-live="polite"></div>
-            <div id="searchResults" class="search-results" aria-live="polite"></div>
-          </form>
-          <div>
-            <p class="eyebrow">Trending examples</p>
-            <div class="quick-picks" id="quickPicks"></div>
-          </div>
-        </section>
 
         <div id="appAlert" class="app-alert" hidden></div>
 
@@ -117,6 +94,13 @@
                 <strong id="stockPrice">Unavailable</strong>
                 <span id="dailyMove">Daily move unavailable</span>
               </div>
+              <div class="trust-strip" id="trustStrip">
+                <div><span>Provider</span><strong>Connecting</strong></div>
+                <div><span>Updated</span><strong>Pending</strong></div>
+                <div><span>Data Quality</span><strong>--/100</strong></div>
+                <div><span>Confidence</span><strong>Pending</strong></div>
+                <div><span>Main source</span><strong>Pending</strong></div>
+              </div>
               <div class="asset-actions">
                 <button id="watchlistToggle" type="button">Add to watchlist</button>
                 <button type="button" data-tab-jump="comparison">Compare this asset</button>
@@ -132,6 +116,35 @@
               <div class="metric-grid key-stats" id="keyStatsGrid"></div>
             </article>
           </div>
+
+          <section class="search-panel">
+            <form id="searchForm" class="search-form">
+              <label for="assetSearch">Search the market universe</label>
+              <div class="search-row">
+                <input id="assetSearch" autocomplete="off" placeholder="Ticker, company, ETF, crypto, sector, exchange..." />
+                <button type="submit">Search</button>
+              </div>
+              <div class="filter-row">
+                <select id="assetTypeFilter" aria-label="Asset type filter">
+                  <option value="">All asset types</option>
+                  <option value="EQUITY">Stocks</option>
+                  <option value="ETF">ETFs</option>
+                  <option value="MUTUALFUND">Index funds</option>
+                  <option value="REIT">REITs</option>
+                  <option value="CRYPTOCURRENCY">Crypto</option>
+                  <option value="INDEX">Indexes</option>
+                </select>
+                <input id="sectorFilter" placeholder="Sector filter" />
+                <input id="exchangeFilter" placeholder="Exchange filter" />
+              </div>
+              <div id="searchMessage" class="form-message" aria-live="polite"></div>
+              <div id="searchResults" class="search-results" aria-live="polite"></div>
+            </form>
+            <div>
+              <p class="eyebrow">Trending examples</p>
+              <div class="quick-picks" id="quickPicks"></div>
+            </div>
+          </section>
 
           <div class="asset-layout wide">
             <article class="panel chart-panel">

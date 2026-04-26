@@ -47,8 +47,24 @@ const METRIC_TOOLTIPS = {
   returnOnEquity: "Profit generated relative to shareholder equity."
 };
 
+const DEFAULT_PORTFOLIO = {
+  startingCash: 100000,
+  cashBalance: null,
+  realizedGainLoss: 0,
+  lastSale: null,
+  riskTolerance: "Moderate",
+  investmentHorizon: "3-5 years",
+  maxAllocation: 25,
+  sectorPreferences: "",
+  holdings: [
+    { symbol: "AAPL", shares: 30, purchasePrice: 155 },
+    { symbol: "JPM", shares: 55, purchasePrice: 176 },
+    { symbol: "SPY", shares: 40, purchasePrice: 430 }
+  ]
+};
+
 const state = {
-  selectedSymbol: "MSFT",
+  selectedSymbol: localStorage.getItem("aurexSelectedSymbol") || "MSFT",
   selectedAsset: null,
   comparisonSymbols: ["AAPL", "MSFT", "NVDA"],
   cache: new Map(),
@@ -57,18 +73,7 @@ const state = {
   watchlist: readStoredList("aurexWatchlist", ["AAPL", "MSFT", "SPY"]),
   recentlyViewed: readStoredList("aurexRecentAssets", []),
   provider: { name: "Connecting", status: "unknown" },
-  portfolio: {
-    startingCash: 100000,
-    riskTolerance: "Moderate",
-    investmentHorizon: "3-5 years",
-    maxAllocation: 25,
-    sectorPreferences: "",
-    holdings: [
-      { symbol: "AAPL", shares: 30, purchasePrice: 155 },
-      { symbol: "JPM", shares: 55, purchasePrice: 176 },
-      { symbol: "SPY", shares: 40, purchasePrice: 430 }
-    ]
-  }
+  portfolio: hydratePortfolio()
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -85,6 +90,34 @@ function readStoredList(key, fallback = []) {
 
 function writeStoredList(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+function readStoredObject(key, fallback = {}) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "null");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function hydratePortfolio() {
+  const saved = readStoredObject("aurexPortfolio", {});
+  const merged = {
+    ...DEFAULT_PORTFOLIO,
+    ...saved,
+    holdings: Array.isArray(saved.holdings) ? saved.holdings : DEFAULT_PORTFOLIO.holdings
+  };
+  if (!Number.isFinite(Number(merged.cashBalance))) {
+    const invested = merged.holdings.reduce((sum, holding) => sum + Number(holding.shares || 0) * Number(holding.purchasePrice || 0), 0);
+    merged.cashBalance = Math.max(0, Number(merged.startingCash || 0) - invested);
+  }
+  merged.realizedGainLoss = Number(merged.realizedGainLoss || 0);
+  return merged;
+}
+
+function savePortfolio() {
+  writeStoredList("aurexPortfolio", state.portfolio);
 }
 
 const marketApi = {
@@ -504,10 +537,12 @@ async function bootDashboard() {
   applySavedTheme();
   wireThemeToggle();
   setupDashboardEvents();
+  renderInitialAssetShell();
   renderQuickPicks();
   updateCompareControls();
   renderWatchlist();
   renderRecentlyViewed();
+  applyPortfolioSettings();
   $("#beginnerToggle").checked = state.beginnerMode;
   try {
     const health = await loadHealth();
@@ -520,11 +555,20 @@ async function bootDashboard() {
     showAlert(`Live data is not connected: ${error.message}. Aurex does not show fake prices as current market data.`);
   }
   await loadAsset(state.selectedSymbol);
-  await runSearch();
+  $("#searchMessage").textContent = "Search any ticker, company, ETF, crypto pair, sector, or exchange.";
   await renderPortfolio();
   setInterval(async () => {
     await refreshDashboardData();
   }, 60_000);
+}
+
+function renderInitialAssetShell() {
+  $("#companyMeta").textContent = "Default asset / loading provider data";
+  $("#companyName").textContent = `${state.selectedSymbol} research dashboard`;
+  $("#assetTags").innerHTML = `<span class="asset-tag">Default analysis loads automatically</span>`;
+  $("#stockPrice").textContent = "Connecting...";
+  $("#dailyMove").textContent = "Fetching current quote";
+  $("#assetSource").textContent = "Aurex is loading the default asset automatically so the dashboard is ready without a first search.";
 }
 
 async function refreshDashboardData() {
@@ -539,6 +583,7 @@ async function loadAsset(symbol, force = false) {
   try {
     const asset = await marketApi.asset(symbol, force);
     state.selectedSymbol = asset.symbol;
+    localStorage.setItem("aurexSelectedSymbol", asset.symbol);
     state.selectedAsset = asset;
     rememberAsset(asset);
     renderAsset(asset);
@@ -573,6 +618,7 @@ function renderAsset(asset) {
   $("#confidenceBadge").textContent = `${score.confidence.level} confidence`;
   $("#confidenceBadge").className = `confidence-badge ${score.confidence.level.toLowerCase()}`;
   $("#dataQualityBadge").textContent = `Data Quality ${score.dataQuality.score}/100`;
+  renderTrustStrip(asset, score);
   $("#watchlistToggle").textContent = state.watchlist.includes(asset.symbol) ? "Remove from watchlist" : "Add to watchlist";
   $("#standaloneScore").textContent = `Score ${score.overall}/100`;
   $("#keyStatsGrid").innerHTML = renderMetricCards(keyStatsRows(asset));
@@ -595,6 +641,17 @@ function renderAsset(asset) {
   renderRecentlyViewed();
 }
 
+function renderTrustStrip(asset, score) {
+  const mainSource = asset.sources?.price || asset.sources?.peRatio || asset.provider || "Unavailable";
+  $("#trustStrip").innerHTML = [
+    ["Provider", asset.provider || "Unavailable"],
+    ["Updated", displayDate(asset.lastUpdated)],
+    ["Data Quality", `${score.dataQuality.score}/100`],
+    ["Confidence", score.confidence.level],
+    ["Main source", mainSource]
+  ].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
+}
+
 function keyStatsRows(asset) {
   return [
     metricRow(asset, "Current price", "price", money(asset.price, asset.currency)),
@@ -614,45 +671,67 @@ function financialMetricRows(asset) {
   return [
     metricRow(asset, "Market cap", "marketCap", asset.marketCap ? `$${compactNumber(asset.marketCap)}` : "Unavailable"),
     metricRow(asset, "P/E ratio", "peRatio", number(asset.peRatio, 2), valuationBadge(asset)),
+    metricRow(asset, "Beta", "beta", number(asset.beta, 2), betaBadge(asset)),
+    metricRow(asset, "EPS", "eps", money(asset.eps, asset.currency)),
+    metricRow(asset, "Revenue growth", "revenueGrowth", percent(asset.revenueGrowth)),
+    metricRow(asset, "Profit margin", "profitMargin", percent(asset.profitMargin, false), marginBadge(asset)),
     metricRow(asset, "Forward P/E", "forwardPe", number(asset.forwardPe, 2)),
     metricRow(asset, "Price-to-book", "priceToBook", number(asset.priceToBook, 2)),
-    metricRow(asset, "EPS", "eps", money(asset.eps, asset.currency)),
     metricRow(asset, "Dividend yield", "dividendYield", percent(asset.dividendYield, false)),
-    metricRow(asset, "Revenue growth", "revenueGrowth", percent(asset.revenueGrowth)),
     metricRow(asset, "Earnings growth", "earningsGrowth", percent(asset.earningsGrowth)),
-    metricRow(asset, "Profit margin", "profitMargin", percent(asset.profitMargin, false), marginBadge(asset)),
     metricRow(asset, "Operating margin", "operatingMargin", percent(asset.operatingMargin, false)),
     metricRow(asset, "Debt-to-equity", "debtToEquity", asset.debtToEquity === null ? "Unavailable" : number(asset.debtToEquity, 2)),
     metricRow(asset, "Return on equity", "returnOnEquity", percent(asset.returnOnEquity, false)),
-    metricRow(asset, "Beta", "beta", number(asset.beta, 2), betaBadge(asset)),
     metricRow(asset, "Sector / industry", "sector", `${asset.sector || "Unavailable"} / ${asset.industry || "Unavailable"}`)
   ];
 }
 
 function renderMetricCards(rows) {
-  return rows.map((entry) => {
+  const normalized = rows.map((entry) => {
     const row = Array.isArray(entry)
       ? { label: entry[0], value: entry[1], source: entry[2] || "Aurex portfolio model", missing: "Derived from portfolio inputs." }
       : entry;
+    return row;
+  });
+  const available = normalized.filter((row) => !isUnavailableValue(row.value));
+  const missing = normalized.filter((row) => isUnavailableValue(row.value));
+  const cards = available.map((row) => {
     return `
     <div class="metric">
       <span>${row.label}${row.tooltip ? `<button class="metric-help" type="button" title="${row.tooltip}">?</button>` : ""}</span>
       <strong>${row.value}</strong>
       ${row.badge ? `<em class="metric-badge ${row.badge.tone}">${row.badge.text}</em>` : ""}
-      <small class="metric-source">${String(row.value).toLowerCase().includes("unavailable") ? "Unavailable from current provider" : `Source: ${row.source}`}</small>
+      <small class="metric-source">Source: ${row.source}</small>
     </div>
   `;
-  }).join("");
+  });
+  if (missing.length) {
+    cards.push(`
+      <div class="metric missing-metric-group">
+        <span>Unavailable from current provider</span>
+        <strong>${missing.length} field${missing.length === 1 ? "" : "s"}</strong>
+        <small class="metric-source">${missing.map((row) => row.label).join(", ")}</small>
+      </div>
+    `);
+  }
+  return cards.join("");
+}
+
+function isUnavailableValue(value) {
+  return String(value).toLowerCase().includes("unavailable");
 }
 
 function metricRow(asset, label, field, value, badge = null) {
+  const inferredSource = field === "sector" && value && !isUnavailableValue(value)
+    ? "Fallback metadata"
+    : "Unavailable from current provider";
   return {
     label,
     field,
     value,
     badge,
     tooltip: METRIC_TOOLTIPS[field],
-    source: asset.sources?.[field] || "Unavailable from current provider",
+    source: asset.sources?.[field] || inferredSource,
     missing: asset.missingReasons?.[field] || "Unavailable from current provider."
   };
 }
@@ -1060,7 +1139,7 @@ async function renderPortfolio(force = false) {
   });
   const invested = holdings.reduce((sum, holding) => sum + holding.cost, 0);
   const marketValue = holdings.reduce((sum, holding) => sum + holding.value, 0);
-  const cash = state.portfolio.startingCash - invested;
+  const cash = Number.isFinite(Number(state.portfolio.cashBalance)) ? Number(state.portfolio.cashBalance) : state.portfolio.startingCash - invested;
   const totalValue = Math.max(0, cash) + marketValue;
   const diversification = scoreDiversification(holdings, totalValue);
   $("#portfolioValue").textContent = money(totalValue);
@@ -1070,10 +1149,13 @@ async function renderPortfolio(force = false) {
     ["Cash remaining", money(cash)],
     ["Holdings value", money(marketValue)],
     ["Profit/loss", money(marketValue - invested)],
+    ["Realized gain/loss", money(state.portfolio.realizedGainLoss)],
     ["Risk level", diversification.riskLabel],
-    ["Top sector", diversification.topSector.label]
+    ["Top sector", diversification.topSector.label],
+    ["Last sale", state.portfolio.lastSale ? `${state.portfolio.lastSale.symbol}: ${money(state.portfolio.lastSale.saleValue)} / ${money(state.portfolio.lastSale.realized)}` : "No sales yet"]
   ]);
   $("#holdingsTable").innerHTML = holdingsTable(holdings, totalValue);
+  wireHoldingControls(holdings);
   renderDiversification(diversification);
   drawDonutChart($("#sectorChart"), sectorAllocationRows(holdings), totalValue);
   drawDonutChart($("#holdingChart"), holdings.map((holding) => ({ label: holding.symbol, value: holding.value })), totalValue);
@@ -1082,22 +1164,103 @@ async function renderPortfolio(force = false) {
 }
 
 function holdingsTable(holdings, totalValue) {
-  const headers = ["Symbol", "Type", "Sector", "Shares", "Avg price", "Current price", "Market value", "Gain/loss", "Allocation"];
+  const headers = ["Position", "Shares", "Avg cost", "Current", "Market value", "Gain/loss", "Allocation", "Manage"];
   const rows = holdings.map((holding) => {
     const allocation = totalValue ? holding.value / totalValue * 100 : 0;
     return [
-      holding.symbol,
-      holding.asset.assetType || "Unknown",
-      holding.asset.sector || "Unknown",
-      number(holding.shares, 2),
-      money(holding.purchasePrice, holding.asset.currency),
+      `<strong>${holding.symbol}</strong><br><small>${holding.asset.assetType || "Unknown"} / ${holding.asset.sector || "Unknown"}</small>`,
+      `<input class="holding-edit" data-field="shares" data-symbol="${holding.symbol}" type="number" min="0" step="0.01" value="${Number(holding.shares || 0)}" />`,
+      `<input class="holding-edit" data-field="purchasePrice" data-symbol="${holding.symbol}" type="number" min="0" step="0.01" value="${Number(holding.purchasePrice || 0).toFixed(2)}" />`,
       money(holding.currentPrice, holding.asset.currency),
       money(holding.value, holding.asset.currency),
       `<span class="${holding.gain >= 0 ? "positive" : "negative"}">${money(holding.gain, holding.asset.currency)}</span>`,
-      `${allocation.toFixed(1)}%`
+      `${allocation.toFixed(1)}%`,
+      `<div class="holding-actions">
+        <input class="sell-shares-input" data-symbol="${holding.symbol}" type="number" min="0" max="${Number(holding.shares || 0)}" step="0.01" placeholder="Shares" />
+        <button type="button" data-action="sell" data-symbol="${holding.symbol}">Sell</button>
+        <button type="button" data-action="remove" data-symbol="${holding.symbol}">Remove</button>
+      </div>`
     ];
   });
   return `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody>`;
+}
+
+function wireHoldingControls(holdings) {
+  $$(".holding-edit").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const holding = state.portfolio.holdings.find((item) => item.symbol === input.dataset.symbol);
+      if (!holding) return;
+      const value = Math.max(0, Number(input.value) || 0);
+      holding[input.dataset.field] = value;
+      if (input.dataset.field === "shares" && value === 0) {
+        state.portfolio.holdings = state.portfolio.holdings.filter((item) => item.symbol !== holding.symbol);
+      }
+      savePortfolio();
+      await renderPortfolio(true);
+    });
+  });
+  $$("[data-action='sell']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const symbol = button.dataset.symbol;
+      const input = $(`.sell-shares-input[data-symbol="${symbol}"]`);
+      await sellShares(symbol, Number(input?.value || 0), holdings);
+    });
+  });
+  $$("[data-action='remove']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await removeHolding(button.dataset.symbol, holdings);
+    });
+  });
+}
+
+async function sellShares(symbol, sharesToSell, pricedHoldings = []) {
+  const holding = state.portfolio.holdings.find((item) => item.symbol === symbol);
+  if (!holding || sharesToSell <= 0) return showAlert("Enter a valid number of shares to sell.");
+  if (sharesToSell > holding.shares) return showAlert("You cannot sell more shares than you own.");
+  const priced = pricedHoldings.find((item) => item.symbol === symbol);
+  const currentPrice = priced?.currentPrice ?? state.cache.get(symbol)?.asset?.price ?? holding.purchasePrice;
+  const saleValue = sharesToSell * currentPrice;
+  const realized = saleValue - sharesToSell * holding.purchasePrice;
+  holding.shares = Number((holding.shares - sharesToSell).toFixed(6));
+  state.portfolio.cashBalance = Number(state.portfolio.cashBalance || 0) + saleValue;
+  state.portfolio.realizedGainLoss = Number(state.portfolio.realizedGainLoss || 0) + realized;
+  state.portfolio.lastSale = {
+    symbol,
+    shares: sharesToSell,
+    saleValue,
+    realized,
+    remainingShares: Math.max(0, holding.shares),
+    timestamp: new Date().toISOString()
+  };
+  if (holding.shares <= 0) {
+    state.portfolio.holdings = state.portfolio.holdings.filter((item) => item.symbol !== symbol);
+  }
+  clearAlert();
+  savePortfolio();
+  await renderPortfolio(true);
+}
+
+async function removeHolding(symbol, pricedHoldings = []) {
+  const holding = state.portfolio.holdings.find((item) => item.symbol === symbol);
+  if (!holding) return;
+  if (!window.confirm(`Remove ${symbol} from the simulated portfolio and add its current market value to cash?`)) return;
+  const priced = pricedHoldings.find((item) => item.symbol === symbol);
+  const currentPrice = priced?.currentPrice ?? state.cache.get(symbol)?.asset?.price ?? holding.purchasePrice;
+  const saleValue = holding.shares * currentPrice;
+  const realized = saleValue - holding.shares * holding.purchasePrice;
+  state.portfolio.cashBalance = Number(state.portfolio.cashBalance || 0) + saleValue;
+  state.portfolio.realizedGainLoss = Number(state.portfolio.realizedGainLoss || 0) + realized;
+  state.portfolio.lastSale = {
+    symbol,
+    shares: holding.shares,
+    saleValue,
+    realized,
+    remainingShares: 0,
+    timestamp: new Date().toISOString()
+  };
+  state.portfolio.holdings = state.portfolio.holdings.filter((item) => item.symbol !== symbol);
+  savePortfolio();
+  await renderPortfolio(true);
 }
 
 function scoreDiversification(holdings, totalValue) {
@@ -1151,7 +1314,10 @@ function renderDiversification(result) {
   $("#scoreExplanation").textContent = `Diversification Score: ${result.total}/100. Your portfolio is ${result.total >= 75 ? "well diversified" : result.total >= 50 ? "moderately diversified" : "concentrated"}, with ${result.topSector.percent.toFixed(1)}% in ${result.topSector.name}, ${result.largest.percent.toFixed(1)}% in ${result.largest.name}, top-three concentration of ${result.top3Pct.toFixed(1)}%, ${result.typeCount} asset type(s), and average beta of ${result.averageBeta.toFixed(2)}. Biggest weakness: ${result.biggestWeakness} Best improvement: ${result.bestImprovement}`;
   $("#sectorRiskLabel").textContent = `${result.topSector.name}: ${result.topSector.percent.toFixed(1)}%`;
   $("#positionRiskLabel").textContent = `${result.largest.name}: ${result.largest.percent.toFixed(1)}%`;
-  $("#portfolioSuggestions").innerHTML = result.suggestions.map((item) => `<span class="suggestion-pill">${item}</span>`).join("");
+  const lastSale = state.portfolio.lastSale
+    ? [`Last sale: ${state.portfolio.lastSale.shares} ${state.portfolio.lastSale.symbol} for ${money(state.portfolio.lastSale.saleValue)}. Realized ${money(state.portfolio.lastSale.realized)}. Remaining shares: ${number(state.portfolio.lastSale.remainingShares, 2)}.`]
+    : [];
+  $("#portfolioSuggestions").innerHTML = [...lastSale, ...result.suggestions].map((item) => `<span class="suggestion-pill">${item}</span>`).join("");
 }
 
 function topPositionConcentration(holdings, totalValue, count) {
@@ -1170,7 +1336,7 @@ function renderPortfolioAware(asset, standaloneScore) {
     return { ...holding, asset: cached, value };
   });
   const investedValue = holdings.reduce((sum, holding) => sum + holding.value, 0);
-  const cash = state.portfolio.startingCash - state.portfolio.holdings.reduce((sum, holding) => sum + holding.shares * holding.purchasePrice, 0);
+  const cash = Number.isFinite(Number(state.portfolio.cashBalance)) ? Number(state.portfolio.cashBalance) : state.portfolio.startingCash - state.portfolio.holdings.reduce((sum, holding) => sum + holding.shares * holding.purchasePrice, 0);
   const total = Math.max(0, cash) + investedValue || state.portfolio.startingCash;
   const sectorValue = holdings.filter((holding) => holding.asset?.sector === asset.sector).reduce((sum, holding) => sum + holding.value, 0);
   const sectorPct = total ? sectorValue / total * 100 : 0;
@@ -1231,8 +1397,7 @@ function renderTradeImpact(asset) {
     return { ...holding, asset: cached || { symbol: holding.symbol, sector: "Unknown", assetType: "Unknown", beta: null, style: "Unknown" }, currentPrice, value: holding.shares * currentPrice };
   });
   const baseMarketValue = baseHoldings.reduce((sum, holding) => sum + holding.value, 0);
-  const investedCost = state.portfolio.holdings.reduce((sum, holding) => sum + holding.shares * holding.purchasePrice, 0);
-  const cash = Math.max(0, state.portfolio.startingCash - investedCost);
+  const cash = Number.isFinite(Number(state.portfolio.cashBalance)) ? Number(state.portfolio.cashBalance) : Math.max(0, state.portfolio.startingCash - state.portfolio.holdings.reduce((sum, holding) => sum + holding.shares * holding.purchasePrice, 0));
   const baseTotal = baseMarketValue + cash || state.portfolio.startingCash || 1;
   const dollars = Number($("#tradeDollars").value) || 0;
   const shares = Number($("#tradeShares").value) || (asset.price ? dollars / asset.price : 0);
@@ -1302,11 +1467,25 @@ function styleBucket(style = "") {
 }
 
 function syncPortfolioSettings() {
-  state.portfolio.startingCash = Number($("#startingCash").value) || 0;
+  const previousStartingCash = Number(state.portfolio.startingCash || 0);
+  const nextStartingCash = Number($("#startingCash").value) || 0;
+  if (nextStartingCash !== previousStartingCash) {
+    state.portfolio.cashBalance = Number(state.portfolio.cashBalance || 0) + (nextStartingCash - previousStartingCash);
+  }
+  state.portfolio.startingCash = nextStartingCash;
   state.portfolio.riskTolerance = $("#riskTolerance").value;
   state.portfolio.investmentHorizon = $("#investmentHorizon").value;
   state.portfolio.maxAllocation = Number($("#maxAllocation").value) || 25;
   state.portfolio.sectorPreferences = $("#sectorPreferences").value;
+  savePortfolio();
+}
+
+function applyPortfolioSettings() {
+  $("#startingCash").value = state.portfolio.startingCash;
+  $("#riskTolerance").value = state.portfolio.riskTolerance;
+  $("#investmentHorizon").value = state.portfolio.investmentHorizon;
+  $("#maxAllocation").value = state.portfolio.maxAllocation;
+  $("#sectorPreferences").value = state.portfolio.sectorPreferences || "";
 }
 
 function drawLineChart(canvas, history, color, currency = "USD", timeframe = "1Y", currentPrice = null) {
@@ -1582,12 +1761,12 @@ function renderRecentlyViewed() {
 }
 
 function setupDashboardEvents() {
-  $$(".nav-tab").forEach((button) => {
-    button.addEventListener("click", async () => {
-      showTab(button.dataset.tab);
-      if (button.dataset.tab === "comparison") await renderComparison();
-      if (button.dataset.tab === "portfolio") await renderPortfolio();
-    });
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest(".nav-tab");
+    if (!button) return;
+    showTab(button.dataset.tab);
+    if (button.dataset.tab === "comparison") await renderComparison();
+    if (button.dataset.tab === "portfolio") await renderPortfolio();
   });
 
   $("#refreshButton").addEventListener("click", refreshDashboardData);
@@ -1631,11 +1810,18 @@ function setupDashboardEvents() {
     if (!symbol) return;
     const asset = await marketApi.asset(symbol).catch(() => null);
     const purchasePrice = Number($("#holdingPrice").value) || asset?.price || 0;
-    state.portfolio.holdings.push({
-      symbol,
-      shares: Number($("#holdingShares").value) || 0,
-      purchasePrice
-    });
+    const shares = Number($("#holdingShares").value) || 0;
+    if (shares <= 0 || purchasePrice <= 0) return;
+    const existing = state.portfolio.holdings.find((holding) => holding.symbol === symbol);
+    if (existing) {
+      const totalShares = Number(existing.shares || 0) + shares;
+      existing.purchasePrice = ((Number(existing.shares || 0) * Number(existing.purchasePrice || 0)) + shares * purchasePrice) / totalShares;
+      existing.shares = totalShares;
+    } else {
+      state.portfolio.holdings.push({ symbol, shares, purchasePrice });
+    }
+    state.portfolio.cashBalance = Number(state.portfolio.cashBalance || 0) - shares * purchasePrice;
+    savePortfolio();
     $("#holdingTicker").value = "";
     $("#holdingPrice").value = "";
     await renderPortfolio(true);

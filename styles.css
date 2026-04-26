@@ -466,6 +466,11 @@ body.dark .app-alert {
   gap: 8px;
 }
 
+.mobile-tabs {
+  display: none;
+  width: 100%;
+}
+
 .side-card {
   display: grid;
   gap: 10px;
@@ -556,19 +561,19 @@ body.dark .app-alert {
 
 .main {
   display: grid;
-  gap: 20px;
-  padding: 28px;
+  gap: 14px;
+  padding: 18px 22px 24px;
 }
 
 .topbar {
-  padding: 24px;
+  padding: 16px 18px;
   align-items: center;
 }
 
 .topbar h1 {
   margin: 0;
   max-width: 860px;
-  font-size: clamp(1.55rem, 2.4vw, 2.55rem);
+  font-size: clamp(1.25rem, 2vw, 1.95rem);
   line-height: 1.08;
 }
 
@@ -632,7 +637,7 @@ body.dark .app-alert {
   display: grid;
   grid-template-columns: minmax(320px, 1fr) minmax(230px, 0.36fr);
   gap: 18px;
-  padding: 18px;
+  padding: 13px;
 }
 
 .search-form label,
@@ -757,12 +762,12 @@ body.dark .app-alert {
 
 .panel {
   min-width: 0;
-  padding: 20px;
+  padding: 18px;
 }
 
 .company-hero {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
 .loading {
@@ -840,7 +845,7 @@ body.dark .app-alert {
 }
 
 .price-line strong {
-  font-size: clamp(2.3rem, 5vw, 4.6rem);
+  font-size: clamp(2rem, 4.4vw, 4rem);
   line-height: 0.95;
   letter-spacing: 0;
 }
@@ -853,6 +858,34 @@ body.dark .app-alert {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.trust-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trust-strip div {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.trust-strip span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.trust-strip strong {
+  display: block;
+  color: var(--ink);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
 }
 
 .asset-actions button,
@@ -974,6 +1007,12 @@ body.dark .app-alert {
 .metric-badge.neutral {
   background: var(--soft);
   color: var(--muted);
+}
+
+.missing-metric-group {
+  grid-column: 1 / -1;
+  min-height: 0;
+  border-style: dashed;
 }
 
 .explanation,
@@ -1241,6 +1280,37 @@ td {
   vertical-align: top;
 }
 
+td small {
+  color: var(--muted);
+}
+
+.holding-edit,
+.sell-shares-input {
+  min-width: 96px;
+  padding: 8px 9px;
+  border-radius: 10px;
+}
+
+.holding-actions {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) auto auto;
+  gap: 7px;
+  align-items: center;
+}
+
+.holding-actions button {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.holding-actions button[data-action="remove"] {
+  color: var(--red);
+}
+
 th {
   color: var(--muted);
   font-size: 0.77rem;
@@ -1339,10 +1409,35 @@ th {
   .sidebar {
     position: static;
     height: auto;
+    order: 2;
+  }
+
+  .main {
+    order: 1;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .topbar {
+    order: 1;
+  }
+
+  #analysis {
+    order: 2;
   }
 
   .nav-tabs {
     grid-template-columns: repeat(4, 1fr);
+  }
+
+  .mobile-tabs {
+    display: grid;
+  }
+
+  .sidebar > .nav-tabs {
+    display: none;
   }
 }
 
@@ -1376,6 +1471,7 @@ th {
   .terminal-grid,
   .metric-grid,
   .portfolio-metrics,
+  .trust-strip,
   .settings-form,
   .holding-form,
   .score-bar,
@@ -1394,6 +1490,10 @@ th {
 
   .status-stack {
     min-width: 0;
+  }
+
+  .holding-actions {
+    grid-template-columns: 1fr;
   }
 
   .verdict-stack {
