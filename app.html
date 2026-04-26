@@ -25,6 +25,21 @@
           <button class="nav-tab" data-tab="data" type="button">Data</button>
         </nav>
 
+        <section class="side-card">
+          <div class="side-card-title">
+            <strong>Watchlist</strong>
+            <small id="watchlistCount">0 assets</small>
+          </div>
+          <div id="watchlistPanel" class="side-list"></div>
+        </section>
+
+        <section class="side-card">
+          <div class="side-card-title">
+            <strong>Recently viewed</strong>
+          </div>
+          <div id="recentPanel" class="side-list"></div>
+        </section>
+
         <button class="theme-toggle" id="themeToggle" type="button">Toggle theme</button>
 
         <div class="disclaimer">
@@ -46,6 +61,7 @@
             </div>
             <div class="status-actions">
               <button id="refreshButton" type="button">Refresh</button>
+              <label class="mode-toggle"><input id="beginnerToggle" type="checkbox" /> Explain simply</label>
               <span id="marketState">Status unknown</span>
             </div>
           </div>
@@ -94,11 +110,16 @@
                 <div class="verdict-stack">
                   <div class="verdict-badge hold" id="companyVerdict">Hold</div>
                   <span id="confidenceBadge" class="confidence-badge">Confidence pending</span>
+                  <span id="dataQualityBadge" class="confidence-badge">Data quality pending</span>
                 </div>
               </div>
               <div class="price-line">
                 <strong id="stockPrice">Unavailable</strong>
                 <span id="dailyMove">Daily move unavailable</span>
+              </div>
+              <div class="asset-actions">
+                <button id="watchlistToggle" type="button">Add to watchlist</button>
+                <button type="button" data-tab-jump="comparison">Compare this asset</button>
               </div>
               <div class="asset-source" id="assetSource">Provider details pending.</div>
             </article>
@@ -116,9 +137,16 @@
             <article class="panel chart-panel">
               <div class="panel-title">
                 <h2>Price History</h2>
-                <span id="priceRangeLabel">1 year</span>
+                <div class="timeframe-controls" id="timeframeControls">
+                  <button type="button" data-timeframe="1D" disabled>1D</button>
+                  <button type="button" data-timeframe="1M">1M</button>
+                  <button type="button" data-timeframe="6M">6M</button>
+                  <button type="button" data-timeframe="1Y" class="active">1Y</button>
+                </div>
               </div>
+              <span id="priceRangeLabel" class="chart-status">1 year</span>
               <canvas id="priceChart" width="1040" height="340" aria-label="Stock price history chart"></canvas>
+              <div class="week-position" id="weekPositionPanel"></div>
             </article>
 
             <article class="panel">
@@ -138,7 +166,9 @@
               </div>
               <p id="verdictExplanation" class="explanation"></p>
               <div class="confidence-note" id="confidenceNote"></div>
-              <div class="score-bars" id="scoreBars"></div>
+              <div class="data-quality" id="dataQualityPanel"></div>
+              <div class="score-bars score-card-grid" id="scoreBars"></div>
+              <div class="analyst-grid" id="analystReportGrid"></div>
             </article>
 
             <article class="panel">
@@ -147,6 +177,42 @@
                 <span>Strengths, weaknesses, risks, catalysts</span>
               </div>
               <div class="research-grid" id="researchGrid"></div>
+            </article>
+          </div>
+
+          <div class="analysis-grid">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Sector Comparison</h2>
+                <span>Estimated benchmarks when live averages are unavailable</span>
+              </div>
+              <div class="research-grid" id="sectorComparisonGrid"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Earnings Catalyst</h2>
+                <span id="earningsStatus">Checking provider</span>
+              </div>
+              <div class="research-grid" id="earningsCatalystGrid"></div>
+            </article>
+          </div>
+
+          <div class="analysis-grid">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Valuation and Risk Read</h2>
+                <span>Plain-English interpretation</span>
+              </div>
+              <div class="research-grid" id="interpretationGrid"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Fair Value Range</h2>
+                <span>Educational estimate, not a prediction</span>
+              </div>
+              <div id="fairValuePanel" class="fair-value-panel"></div>
             </article>
           </div>
 
@@ -166,6 +232,15 @@
               </div>
               <p id="portfolioAwareExplanation" class="explanation"></p>
               <div class="personalization-list" id="personalizationList"></div>
+              <div class="trade-simulator">
+                <h3>Trade Impact Simulator</h3>
+                <div class="trade-inputs">
+                  <label>Dollars to invest<input id="tradeDollars" type="number" min="0" step="100" value="5000" /></label>
+                  <label>Shares<input id="tradeShares" type="number" min="0" step="0.01" placeholder="Optional" /></label>
+                  <label>Portfolio %<input id="tradePercent" type="number" min="0" max="100" step="0.1" placeholder="Optional" /></label>
+                </div>
+                <div id="tradeImpactResult" class="trade-result"></div>
+              </div>
             </article>
           </div>
         </section>
@@ -178,6 +253,7 @@
             </div>
             <div class="compare-controls" id="compareControls"></div>
             <div class="comparison-summary" id="comparisonSummary"></div>
+            <div class="winner-grid" id="comparisonWinners"></div>
             <canvas id="comparisonChart" width="1040" height="280" aria-label="Company comparison metrics chart"></canvas>
             <div class="table-wrap">
               <table class="comparison-table" id="comparisonTable"></table>

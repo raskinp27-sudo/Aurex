@@ -1,8 +1,10 @@
 # Aurex
 
-Aurex is a live market research and portfolio simulation platform. It combines provider-backed market data, a weighted investment scoring model, news sentiment, side-by-side comparisons, portfolio-aware recommendations, and diversification scoring.
+Aurex is a live market research and portfolio simulation platform. It combines provider-backed market data, transparent field sources, data quality scoring, a weighted investment scoring model, news sentiment, side-by-side comparisons, watchlists, recently viewed assets, portfolio-aware recommendations, trade impact simulation, and diversification scoring.
 
-The app intentionally does not invent missing financial data. If a provider does not return a metric, the UI shows `Unavailable` and lowers the analysis confidence where appropriate.
+The app intentionally does not invent missing financial data. If a provider does not return a metric, the UI shows `N/A` and lowers the analysis confidence where appropriate.
+
+Each major metric includes a source label, such as `Finnhub`, `Yahoo chart quote`, `Estimated sector benchmark`, or `Unavailable from current provider`. API responses are cached briefly for quotes/search and longer for fundamentals to reduce provider rate limits.
 
 ## Routes
 
@@ -41,7 +43,7 @@ node --check server.js && node --check app.js
 
 ## Market Data Providers
 
-The default mode is `MARKET_PROVIDER=auto`. It chooses a keyed provider when credentials are available, otherwise it falls back to the no-key Yahoo-compatible search/chart plus Stooq delayed quote path.
+The default mode is `MARKET_PROVIDER=auto`. It uses Yahoo-compatible search/history/news data as the resilient base. When `FINNHUB_API_KEY` is available, Aurex uses Finnhub first for quote, profile, and basic financial metrics including current price, daily change, day range, market cap, P/E, EPS, beta, margins, dividend yield, debt-to-equity, ROE, and 52-week data. Without keys, it falls back to the no-key Yahoo-compatible search/chart plus Stooq delayed quote path.
 
 Environment variables:
 
@@ -76,8 +78,8 @@ Use `.env.example` as the environment variable checklist. The app still runs wit
    - Build command: `npm install`
    - Start command: `npm start`
 4. Add environment variables in Render:
-   - `MARKET_PROVIDER=auto`
-   - `FINNHUB_API_KEY`, `ALPHA_VANTAGE_API_KEY`, or both if available
+- `MARKET_PROVIDER=auto`
+- `FINNHUB_API_KEY`, `ALPHA_VANTAGE_API_KEY`, or both if available
 5. Deploy. Render will provide `PORT`; the server reads it automatically.
 
 ## Deployment: Vercel
@@ -97,7 +99,7 @@ For the most predictable deployment of this plain Node server, Render is the sim
 
 The standalone investment score is weighted:
 
-- Financial strength: 25%
+- Balance sheet / financial strength: 25%
 - Valuation: 20%
 - Growth: 20%
 - Profitability: 15%
@@ -110,7 +112,15 @@ Verdict thresholds:
 - `50-74`: Hold
 - `0-49`: Sell
 
-Analysis confidence depends on provider coverage for quote, market data, valuation, fundamentals, history, and news. Missing fields lower confidence and are shown to the user.
+Data Quality is scored separately from Investment Confidence. Data Quality tracks whether the most important fields are available. Investment Confidence also considers history, news, missing fundamentals, provider reliability, and volatility.
+
+The UI also includes:
+
+- Analyst-style verdict reports with bull case, bear case, main reason, and what could change the verdict
+- Valuation and risk interpretation in normal or beginner-friendly language
+- 52-week position indicator and educational fair value range
+- LocalStorage watchlist and recently viewed assets
+- Portfolio trade impact simulator and more detailed diversification scoring
 
 ## Disclaimer
 

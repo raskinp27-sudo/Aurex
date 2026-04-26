@@ -7,6 +7,10 @@ const PORT = Number(process.env.PORT || 4174);
 const ROOT = __dirname;
 const MARKET_PROVIDER = (process.env.MARKET_PROVIDER || "auto").toLowerCase();
 const SEARCH_METADATA = new Map();
+const API_CACHE = new Map();
+const QUOTE_TTL_MS = 45_000;
+const SEARCH_TTL_MS = 90_000;
+const FUNDAMENTAL_TTL_MS = 6 * 60 * 60 * 1000;
 
 const CATALOG = [
   ["AAPL", "Apple Inc.", "EQUITY", "NASDAQ", "Technology", "Consumer Electronics", "Quality Growth"],
@@ -72,6 +76,20 @@ const SECTOR_PE = {
   Crypto: null
 };
 
+const SECTOR_BENCHMARKS = {
+  Technology: { pe: 30, profitMargin: 22, beta: 1.15 },
+  "Communication Services": { pe: 22, profitMargin: 16, beta: 1.05 },
+  "Consumer Cyclical": { pe: 24, profitMargin: 9, beta: 1.15 },
+  "Financial Services": { pe: 13, profitMargin: 24, beta: 1.05 },
+  Healthcare: { pe: 21, profitMargin: 14, beta: 0.9 },
+  "Consumer Defensive": { pe: 23, profitMargin: 8, beta: 0.75 },
+  Energy: { pe: 12, profitMargin: 10, beta: 0.95 },
+  Industrials: { pe: 20, profitMargin: 9, beta: 1.05 },
+  "Real Estate": { pe: 18, profitMargin: 18, beta: 0.95 },
+  "Broad Market": { pe: 22, profitMargin: 11, beta: 1 },
+  Crypto: { pe: null, profitMargin: null, beta: 1.8 }
+};
+
 class MarketProvider {
   constructor(name) {
     this.name = name;
@@ -87,6 +105,57 @@ class MarketProvider {
 
   async getBatch(symbols) {
     return Promise.all(symbols.map((symbol) => this.getAsset(symbol)));
+  }
+}
+
+class HybridMarketProvider extends MarketProvider {
+  constructor(finnhubKey) {
+    super(finnhubKey ? "Finnhub market data + Yahoo fallback" : "Yahoo Search + Stooq delayed quote");
+    this.quoteProvider = new YahooFinanceProvider();
+    this.finnhubProvider = finnhubKey ? new FinnhubProvider(finnhubKey) : null;
+    this.lastWarning = "";
+  }
+
+  async search(query, filters = {}) {
+    this.lastWarning = "";
+    if (this.finnhubProvider) {
+      try {
+        return this.finnhubProvider.search(query, filters);
+      } catch (error) {
+        this.lastWarning = userSafeError(error);
+      }
+    }
+    try {
+      return await this.quoteProvider.search(query, filters);
+    } catch (error) {
+      this.lastWarning = userSafeError(error);
+      return filterResults(fallbackSearch(query), filters).slice(0, 24);
+    }
+  }
+
+  async getAsset(symbol) {
+    const normalized = normalizeSymbol(symbol);
+    const quoteAsset = await this.quoteProvider.getAsset(normalized);
+    if (!this.finnhubProvider || quoteAsset.assetType === "CRYPTOCURRENCY") {
+      return normalizeAsset({
+        ...quoteAsset,
+        provider: this.name,
+        sourceNote: quoteAsset.sourceNote
+      });
+    }
+    const fundamentals = await cached(`finnhub-market-overlay:${normalized}`, FUNDAMENTAL_TTL_MS, () => {
+      return this.finnhubProvider.getMarketOverlay(normalized);
+    }).catch((error) => ({
+      sourceNote: `Finnhub data unavailable. ${userSafeError(error)}`
+    }));
+    return normalizeAsset(deepMergeAsset(quoteAsset, fundamentals, {
+      provider: this.name,
+      live: fundamentals.price ? true : quoteAsset.live,
+      lastUpdated: fundamentals.lastUpdated || quoteAsset.lastUpdated,
+      sourceNote: fundamentals.sourceNote
+        ? `${quoteAsset.sourceNote} ${fundamentals.sourceNote}`
+        : "Yahoo-compatible data is used as fallback; Finnhub quote/profile/basic financials are primary when returned."
+    }));
   }
 }
 
@@ -145,6 +214,12 @@ class YahooFinanceProvider extends MarketProvider {
       ...fundamentals,
       history,
       news,
+      sources: mergeSources(
+        quote.sources,
+        fundamentals.sources,
+        history.length ? sourceMap("Yahoo chart history", ["history"]) : {},
+        news.length ? sourceMap("Yahoo Finance news", ["news"]) : {}
+      ),
       provider: this.name,
       live: Boolean(quote.price),
       sourceNote: "Live or delayed market quote from the active no-key provider. Fundamentals depend on provider availability; configure Finnhub or Alpha Vantage for deeper ratios."
@@ -180,7 +255,12 @@ class YahooFinanceProvider extends MarketProvider {
         dayLow: numberOrNull(quote.regularMarketDayLow),
         volume: numberOrNull(quote.regularMarketVolume ?? quote.averageDailyVolume3Month),
         averageVolume: numberOrNull(quote.averageDailyVolume3Month ?? quote.averageDailyVolume10Day),
-        lastUpdated: quote.regularMarketTime ? new Date(quote.regularMarketTime * 1000).toISOString() : new Date().toISOString()
+        lastUpdated: quote.regularMarketTime ? new Date(quote.regularMarketTime * 1000).toISOString() : new Date().toISOString(),
+        sources: sourceMap("Yahoo quote", [
+          "price", "previousClose", "change", "changePercent", "marketCap", "peRatio", "forwardPe",
+          "eps", "dividendYield", "week52High", "week52Low", "open", "dayHigh", "dayLow",
+          "volume", "averageVolume", "exchange", "currency"
+        ])
       };
     } catch {
       try {
@@ -232,7 +312,11 @@ class YahooFinanceProvider extends MarketProvider {
       dayLow: numberOrNull(lows.at(-1)),
       volume: numberOrNull(meta.regularMarketVolume ?? volumes.at(-1)),
       averageVolume: volumes.length ? Math.round(volumes.reduce((sum, value) => sum + value, 0) / volumes.length) : null,
-      lastUpdated: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : new Date().toISOString()
+      lastUpdated: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : new Date().toISOString(),
+      sources: sourceMap("Yahoo chart quote", [
+        "price", "previousClose", "change", "changePercent", "open", "dayHigh", "dayLow",
+        "volume", "averageVolume", "exchange", "currency"
+      ])
     };
   }
 
@@ -273,7 +357,10 @@ class YahooFinanceProvider extends MarketProvider {
       dayHigh: numberOrNull(row.high),
       dayLow: numberOrNull(row.low),
       volume: numberOrNull(row.volume),
-      lastUpdated: row.date && row.time ? new Date(`${row.date}T${row.time}Z`).toISOString() : new Date().toISOString()
+      lastUpdated: row.date && row.time ? new Date(`${row.date}T${row.time}Z`).toISOString() : new Date().toISOString(),
+      sources: sourceMap("Stooq delayed quote", [
+        "price", "previousClose", "change", "changePercent", "open", "dayHigh", "dayLow", "volume"
+      ])
     };
   }
 
@@ -310,7 +397,13 @@ class YahooFinanceProvider extends MarketProvider {
       peRatio: raw(detail.trailingPE),
       volume: raw(detail.volume),
       sectorPe: SECTOR_PE[profile.sector || catalog.sector] ?? null,
-      style: catalog.style || inferStyle(profile.sector, raw(stats.beta), raw(detail.trailingPE))
+      style: catalog.style || inferStyle(profile.sector, raw(stats.beta), raw(detail.trailingPE)),
+      sources: sourceMap("Yahoo fundamentals", [
+        "sector", "industry", "summary", "profitMargin", "revenueGrowth", "earningsGrowth",
+        "debtToEquity", "currentRatio", "beta", "forwardPe", "priceToBook", "eps",
+        "dividendYield", "averageVolume", "targetMeanPrice", "week52High", "week52Low",
+        "marketCap", "peRatio", "volume"
+      ])
     };
   }
 
@@ -372,6 +465,87 @@ class FinnhubProvider extends MarketProvider {
     return filterResults(mergeSearchResults(results, fallbackSearch(query)), filters).slice(0, 24);
   }
 
+  async getFundamentalOverlay(symbol) {
+    return this.getMarketOverlay(symbol);
+  }
+
+  async getMarketOverlay(symbol) {
+    const normalized = normalizeSymbol(symbol);
+    const today = new Date();
+    const future = new Date(today);
+    future.setDate(today.getDate() + 120);
+    const [quote, profile, metric, earningsHistory, earningsCalendar] = await Promise.all([
+      this.request("quote", { symbol: normalized }).catch(() => ({})),
+      this.request("stock/profile2", { symbol: normalized }).catch(() => ({})),
+      this.request("stock/metric", { symbol: normalized, metric: "all" }).catch(() => ({ metric: {} })),
+      this.request("stock/earnings", { symbol: normalized, limit: "4" }).catch(() => []),
+      this.request("calendar/earnings", {
+        symbol: normalized,
+        from: today.toISOString().slice(0, 10),
+        to: future.toISOString().slice(0, 10)
+      }).catch(() => ({ earningsCalendar: [] }))
+    ]);
+    const catalog = CATALOG_BY_SYMBOL[normalized] || {};
+    const metrics = metric.metric || {};
+    const recentEarnings = Array.isArray(earningsHistory) ? earningsHistory[0] : null;
+    const nextEarnings = earningsCalendar.earningsCalendar?.[0] || null;
+    const currentPrice = numberOrNull(quote.c);
+    return {
+      symbol: normalized,
+      name: profile.name || catalog.name || normalized,
+      exchange: profile.exchange || catalog.exchange || "Unknown",
+      sector: catalog.sector || profile.finnhubIndustry || "Unknown",
+      industry: profile.finnhubIndustry || catalog.industry || "Unknown",
+      logo: profile.logo || "",
+      currency: profile.currency || "USD",
+      price: currentPrice,
+      previousClose: numberOrNull(quote.pc),
+      change: numberOrNull(quote.d),
+      changePercent: numberOrNull(quote.dp),
+      open: numberOrNull(quote.o),
+      dayHigh: numberOrNull(quote.h),
+      dayLow: numberOrNull(quote.l),
+      marketCap: profile.marketCapitalization ? profile.marketCapitalization * 1_000_000 : firstMetric(metrics, ["marketCapitalization"]),
+      peRatio: firstMetric(metrics, ["peNormalizedAnnual", "peTTM"]),
+      forwardPe: firstMetric(metrics, ["forwardPE"]),
+      priceToBook: firstMetric(metrics, ["pbAnnual", "pbQuarterly"]),
+      eps: firstMetric(metrics, ["epsTTM", "epsNormalizedAnnual", "epsInclExtraItemsTTM"]),
+      dividendYield: percentMaybe(firstMetric(metrics, ["dividendYieldIndicatedAnnual", "dividendYield5Y"])),
+      week52High: firstMetric(metrics, ["52WeekHigh"]),
+      week52Low: firstMetric(metrics, ["52WeekLow"]),
+      averageVolume: normalizeAverageVolume(firstMetric(metrics, ["10DayAverageTradingVolume", "3MonthAverageTradingVolume"])),
+      revenueGrowth: percentMaybe(firstMetric(metrics, ["revenueGrowthTTMYoy", "revenueGrowthQuarterlyYoy"])),
+      earningsGrowth: percentMaybe(firstMetric(metrics, ["epsGrowthTTMYoy", "epsGrowthQuarterlyYoy"])),
+      profitMargin: percentMaybe(firstMetric(metrics, ["netProfitMarginTTM", "netProfitMarginAnnual"])),
+      operatingMargin: percentMaybe(firstMetric(metrics, ["operatingMarginTTM", "operatingMarginAnnual"])),
+      debtToEquity: normalizeDebt(firstMetric(metrics, ["totalDebt/totalEquityAnnual", "totalDebt/totalEquityQuarterly"])),
+      returnOnEquity: percentMaybe(firstMetric(metrics, ["roeTTM", "roeRfy"])),
+      currentRatio: firstMetric(metrics, ["currentRatioAnnual", "currentRatioQuarterly"]),
+      beta: firstMetric(metrics, ["beta"]),
+      nextEarningsDate: nextEarnings?.date || null,
+      earningsSurprise: recentEarnings && numberOrNull(recentEarnings.surprisePercent ?? recentEarnings.surprise) !== null
+        ? numberOrNull(recentEarnings.surprisePercent ?? recentEarnings.surprise)
+        : null,
+      recentEarningsPeriod: recentEarnings?.period || null,
+      sectorPe: SECTOR_PE[catalog.sector || profile.finnhubIndustry] ?? null,
+      style: catalog.style || "Unknown",
+      live: Boolean(currentPrice),
+      lastUpdated: quote.t ? new Date(quote.t * 1000).toISOString() : null,
+      sources: mergeSources(
+        sourceMap("Finnhub", ["price", "previousClose", "change", "changePercent", "open", "dayHigh", "dayLow", "lastUpdated"]),
+        sourceMap("Finnhub", [
+        "name", "exchange", "sector", "industry", "logo", "currency", "marketCap", "peRatio", "forwardPe",
+        "priceToBook", "eps", "dividendYield", "week52High", "week52Low", "averageVolume",
+        "revenueGrowth", "earningsGrowth", "profitMargin", "operatingMargin", "debtToEquity",
+        "returnOnEquity", "currentRatio", "beta", "nextEarningsDate", "earningsSurprise",
+        "recentEarningsPeriod"
+        ])
+      ),
+      fundamentalsUpdatedAt: new Date().toISOString(),
+      sourceNote: "Finnhub quote, profile, and basic financials returned the available fields. Fundamental metrics may lag quarterly filings even when quote data is intraday."
+    };
+  }
+
   async getAsset(symbol) {
     const normalized = normalizeSymbol(symbol);
     const to = Math.floor(Date.now() / 1000);
@@ -379,7 +553,7 @@ class FinnhubProvider extends MarketProvider {
     const today = new Date();
     const start = new Date(today);
     start.setDate(today.getDate() - 21);
-    const [quote, profile, metric, candles, news] = await Promise.all([
+    const [quote, profile, metric, candles, news, earningsHistory, earningsCalendar] = await Promise.all([
       this.request("quote", { symbol: normalized }),
       this.request("stock/profile2", { symbol: normalized }).catch(() => ({})),
       this.request("stock/metric", { symbol: normalized, metric: "all" }).catch(() => ({ metric: {} })),
@@ -388,38 +562,57 @@ class FinnhubProvider extends MarketProvider {
         symbol: normalized,
         from: start.toISOString().slice(0, 10),
         to: today.toISOString().slice(0, 10)
-      }).catch(() => [])
+      }).catch(() => []),
+      this.request("stock/earnings", { symbol: normalized, limit: "4" }).catch(() => []),
+      this.request("calendar/earnings", {
+        symbol: normalized,
+        from: today.toISOString().slice(0, 10),
+        to: new Date(today.getTime() + 120 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+      }).catch(() => ({ earningsCalendar: [] }))
     ]);
     const catalog = CATALOG_BY_SYMBOL[normalized] || {};
     const metrics = metric.metric || {};
+    const recentEarnings = Array.isArray(earningsHistory) ? earningsHistory[0] : null;
+    const nextEarnings = earningsCalendar.earningsCalendar?.[0] || null;
     return normalizeAsset({
       symbol: normalized,
       name: profile.name || catalog.name || normalized,
       assetType: catalog.assetType || "EQUITY",
       exchange: profile.exchange || catalog.exchange || "Unknown",
-      sector: profile.finnhubIndustry || catalog.sector || "Unknown",
+      sector: catalog.sector || profile.finnhubIndustry || "Unknown",
       industry: profile.finnhubIndustry || catalog.industry || "Unknown",
+      logo: profile.logo || "",
       currency: profile.currency || "USD",
       price: numberOrNull(quote.c),
       previousClose: numberOrNull(quote.pc),
-      change: quote.c && quote.pc ? quote.c - quote.pc : null,
-      changePercent: quote.c && quote.pc ? ((quote.c - quote.pc) / quote.pc) * 100 : null,
+      change: numberOrNull(quote.d),
+      changePercent: numberOrNull(quote.dp),
+      open: numberOrNull(quote.o),
+      dayHigh: numberOrNull(quote.h),
+      dayLow: numberOrNull(quote.l),
       marketCap: profile.marketCapitalization ? profile.marketCapitalization * 1_000_000 : null,
       peRatio: numberOrNull(metrics.peNormalizedAnnual ?? metrics.peTTM),
       forwardPe: numberOrNull(metrics.forwardPE),
       priceToBook: numberOrNull(metrics.pbAnnual ?? metrics.pbQuarterly),
-      eps: numberOrNull(metrics.epsNormalizedAnnual ?? metrics.epsTTM),
+      eps: numberOrNull(metrics.epsTTM ?? metrics.epsNormalizedAnnual ?? metrics.epsInclExtraItemsTTM),
       dividendYield: percentMaybe(metrics.dividendYieldIndicatedAnnual),
       week52High: numberOrNull(metrics["52WeekHigh"]),
       week52Low: numberOrNull(metrics["52WeekLow"]),
       volume: null,
-      averageVolume: numberOrNull(metrics["10DayAverageTradingVolume"] ?? metrics["3MonthAverageTradingVolume"]),
+      averageVolume: normalizeAverageVolume(metrics["10DayAverageTradingVolume"] ?? metrics["3MonthAverageTradingVolume"]),
       revenueGrowth: percentMaybe(metrics.revenueGrowthTTMYoy),
       earningsGrowth: percentMaybe(metrics.epsGrowthTTMYoy),
-      profitMargin: percentMaybe(metrics.netProfitMarginAnnual),
-      debtToEquity: normalizeDebt(metrics["totalDebt/totalEquityAnnual"]),
-      currentRatio: numberOrNull(metrics.currentRatioAnnual),
+      profitMargin: percentMaybe(metrics.netProfitMarginTTM ?? metrics.netProfitMarginAnnual),
+      operatingMargin: percentMaybe(metrics.operatingMarginTTM ?? metrics.operatingMarginAnnual),
+      debtToEquity: normalizeDebt(metrics["totalDebt/totalEquityAnnual"] ?? metrics["totalDebt/totalEquityQuarterly"]),
+      returnOnEquity: percentMaybe(metrics.roeTTM ?? metrics.roeRfy),
+      currentRatio: numberOrNull(metrics.currentRatioAnnual ?? metrics.currentRatioQuarterly),
       beta: numberOrNull(metrics.beta),
+      nextEarningsDate: nextEarnings?.date || null,
+      earningsSurprise: recentEarnings && numberOrNull(recentEarnings.surprisePercent ?? recentEarnings.surprise) !== null
+        ? numberOrNull(recentEarnings.surprisePercent ?? recentEarnings.surprise)
+        : null,
+      recentEarningsPeriod: recentEarnings?.period || null,
       sectorPe: SECTOR_PE[catalog.sector] ?? null,
       style: catalog.style || "Unknown",
       history: candles.s === "ok" ? candles.t.map((time, index) => ({
@@ -436,6 +629,19 @@ class FinnhubProvider extends MarketProvider {
       provider: this.name,
       live: Boolean(quote.c),
       lastUpdated: quote.t ? new Date(quote.t * 1000).toISOString() : new Date().toISOString(),
+      fundamentalsUpdatedAt: new Date().toISOString(),
+      sources: mergeSources(
+        sourceMap("Finnhub", ["price", "previousClose", "change", "changePercent", "open", "dayHigh", "dayLow", "lastUpdated"]),
+        sourceMap("Finnhub", [
+          "name", "exchange", "sector", "industry", "logo", "currency", "marketCap", "peRatio", "forwardPe",
+          "priceToBook", "eps", "dividendYield", "week52High", "week52Low", "averageVolume",
+          "revenueGrowth", "earningsGrowth", "profitMargin", "operatingMargin", "debtToEquity",
+          "returnOnEquity", "currentRatio", "beta", "nextEarningsDate", "earningsSurprise",
+          "recentEarningsPeriod"
+        ]),
+        candles.s === "ok" ? sourceMap("Finnhub price history", ["history"]) : {},
+        news.length ? sourceMap("Finnhub news", ["news"]) : {}
+      ),
       sourceNote: "Live quote and news from Finnhub. Fundamentals use Finnhub company metrics where available."
     });
   }
@@ -508,7 +714,9 @@ class AlphaVantageProvider extends MarketProvider {
       revenueGrowth: null,
       earningsGrowth: numberOrNull(overview.QuarterlyEarningsGrowthYOY) ? Number(overview.QuarterlyEarningsGrowthYOY) * 100 : null,
       profitMargin: numberOrNull(overview.ProfitMargin) ? Number(overview.ProfitMargin) * 100 : null,
+      operatingMargin: numberOrNull(overview.OperatingMarginTTM) ? Number(overview.OperatingMarginTTM) * 100 : null,
       debtToEquity: null,
+      returnOnEquity: numberOrNull(overview.ReturnOnEquityTTM) ? Number(overview.ReturnOnEquityTTM) * 100 : null,
       beta: numberOrNull(overview.Beta),
       analystRating: overview.AnalystRatingStrongBuy ? "analyst data available" : null,
       sectorPe: SECTOR_PE[overview.Sector || catalog.sector] ?? null,
@@ -525,15 +733,25 @@ class AlphaVantageProvider extends MarketProvider {
       provider: this.name,
       live: Boolean(quote["05. price"]),
       lastUpdated: new Date().toISOString(),
+      fundamentalsUpdatedAt: new Date().toISOString(),
+      sources: mergeSources(
+        sourceMap("Alpha Vantage quote", ["price", "previousClose", "change", "changePercent", "volume"]),
+        sourceMap("Alpha Vantage overview", [
+          "name", "assetType", "exchange", "sector", "industry", "currency", "marketCap", "peRatio",
+          "forwardPe", "priceToBook", "eps", "dividendYield", "week52High", "week52Low",
+          "earningsGrowth", "profitMargin", "operatingMargin", "returnOnEquity", "beta"
+        ]),
+        history.length ? sourceMap("Alpha Vantage history", ["history"]) : {},
+        newsResponse.feed?.length ? sourceMap("Alpha Vantage news", ["news"]) : {}
+      ),
       sourceNote: "Quote, overview, history, and news from Alpha Vantage."
     });
   }
 }
 
 function createProvider() {
-  if (MARKET_PROVIDER === "auto" && process.env.FINNHUB_API_KEY) return new FinnhubProvider(process.env.FINNHUB_API_KEY);
-  if (MARKET_PROVIDER === "auto" && process.env.ALPHA_VANTAGE_API_KEY) return new AlphaVantageProvider(process.env.ALPHA_VANTAGE_API_KEY);
-  if (MARKET_PROVIDER === "finnhub") return new FinnhubProvider(process.env.FINNHUB_API_KEY);
+  if (MARKET_PROVIDER === "auto") return new HybridMarketProvider(process.env.FINNHUB_API_KEY);
+  if (MARKET_PROVIDER === "finnhub") return new HybridMarketProvider(process.env.FINNHUB_API_KEY);
   if (MARKET_PROVIDER === "alphavantage") return new AlphaVantageProvider(process.env.ALPHA_VANTAGE_API_KEY);
   return new YahooFinanceProvider();
 }
@@ -568,8 +786,15 @@ async function handleRequest(request, response) {
         industry: url.searchParams.get("industry") || "",
         exchange: url.searchParams.get("exchange") || ""
       };
-      const results = await provider.search(query, filters);
-      return json(response, { provider: provider.name, query, results, timestamp: new Date().toISOString() });
+      provider.lastWarning = "";
+      const results = await cached(`search:${provider.name}:${query}:${JSON.stringify(filters)}`, SEARCH_TTL_MS, () => provider.search(query, filters));
+      return json(response, {
+        provider: provider.name,
+        query,
+        results,
+        warning: provider.lastWarning || "",
+        timestamp: new Date().toISOString()
+      });
     }
     if (url.pathname === "/api/assets") {
       const symbols = (url.searchParams.get("symbols") || "").split(",").map(normalizeSymbol).filter(Boolean).slice(0, 12);
@@ -579,16 +804,15 @@ async function handleRequest(request, response) {
     }
     if (url.pathname.startsWith("/api/asset/")) {
       const symbol = decodeURIComponent(url.pathname.replace("/api/asset/", ""));
+      if (!normalizeSymbol(symbol)) {
+        return json(response, 400, structuredError("Enter a valid ticker or asset symbol.", "invalid_symbol"));
+      }
       const asset = await getAssetWithFallback(symbol);
       return json(response, { provider: provider.name, asset, timestamp: new Date().toISOString() });
     }
     return serveStatic(url.pathname, response);
   } catch (error) {
-    json(response, 500, {
-      error: error.message || "Unexpected server error",
-      provider: provider.name,
-      timestamp: new Date().toISOString()
-    });
+    json(response, 500, structuredError(userSafeError(error), "provider_error"));
   }
 }
 
@@ -606,12 +830,23 @@ async function settleAssets(symbols) {
   return settled.map((result, index) => result.status === "fulfilled" ? result.value : fallbackAsset(symbols[index], result.reason?.message));
 }
 
+async function cached(key, ttlMs, loader) {
+  const cachedEntry = API_CACHE.get(key);
+  if (cachedEntry && Date.now() - cachedEntry.timestamp < ttlMs) return cachedEntry.value;
+  const value = await loader();
+  API_CACHE.set(key, { value, timestamp: Date.now() });
+  return value;
+}
+
 async function getAssetWithFallback(symbol) {
-  try {
-    return await provider.getAsset(symbol);
-  } catch (error) {
-    return fallbackAsset(symbol, error.message);
-  }
+  const normalized = normalizeSymbol(symbol);
+  return cached(`asset:${provider.name}:${normalized}`, QUOTE_TTL_MS, async () => {
+    try {
+      return await provider.getAsset(normalized);
+    } catch (error) {
+      return fallbackAsset(normalized, error.message);
+    }
+  });
 }
 
 function fallbackAsset(symbol, reason) {
@@ -641,6 +876,11 @@ function fallbackAsset(symbol, reason) {
     averageVolume: null,
     eps: null,
     dividendYield: null,
+    operatingMargin: null,
+    returnOnEquity: null,
+    nextEarningsDate: null,
+    earningsSurprise: null,
+    recentEarningsPeriod: null,
     history: [],
     news: [],
     provider: "Fallback metadata",
@@ -648,6 +888,60 @@ function fallbackAsset(symbol, reason) {
     lastUpdated: new Date().toISOString(),
     sourceNote: `Live market data unavailable. ${reason || "No provider response."}`
   });
+}
+
+function deepMergeAsset(base, overlay = {}, extra = {}) {
+  const merged = { ...base };
+  Object.entries(overlay).forEach(([key, value]) => {
+    if (key === "sources") return;
+    if (value !== null && value !== undefined && value !== "") merged[key] = value;
+  });
+  Object.entries(extra).forEach(([key, value]) => {
+    if (key === "sources") return;
+    if (value !== null && value !== undefined && value !== "") merged[key] = value;
+  });
+  merged.sources = mergeSources(base.sources, overlay.sources, extra.sources);
+  return merged;
+}
+
+function sourceMap(source, fields) {
+  return Object.fromEntries(fields.map((field) => [field, source]));
+}
+
+function mergeSources(...maps) {
+  return Object.assign({}, ...maps.filter(Boolean));
+}
+
+function normalizeSources(sources, context = {}) {
+  const normalized = { ...sources };
+  if (!normalized.lastUpdated) normalized.lastUpdated = "Provider timestamp";
+  if (!normalized.sectorPe && context.sector) normalized.sectorPe = "Estimated sector benchmark";
+  if (!normalized.sectorBenchmark && context.sector) normalized.sectorBenchmark = "Estimated sector benchmark";
+  if (!normalized.week52High && context.historyHigh !== null) normalized.week52High = "Derived from price history";
+  if (!normalized.week52Low && context.historyLow !== null) normalized.week52Low = "Derived from price history";
+  return normalized;
+}
+
+function missingReasons(sources, asset) {
+  const fields = [
+    "price", "change", "changePercent", "marketCap", "peRatio", "forwardPe", "eps", "beta",
+    "dividendYield", "week52High", "week52Low", "volume", "averageVolume", "revenueGrowth",
+    "earningsGrowth", "profitMargin", "operatingMargin", "debtToEquity", "returnOnEquity",
+    "nextEarningsDate", "earningsSurprise", "open", "dayHigh", "dayLow"
+  ];
+  return Object.fromEntries(fields.filter((field) => {
+    return asset[field] === null || asset[field] === undefined || asset[field] === "";
+  }).map((field) => [field, "Unavailable from current provider."]));
+}
+
+function estimatedBenchmarks(sector) {
+  const benchmark = SECTOR_BENCHMARKS[sector] || { pe: SECTOR_PE[sector] ?? null, profitMargin: 10, beta: 1 };
+  return {
+    pe: benchmark.pe,
+    profitMargin: benchmark.profitMargin,
+    beta: benchmark.beta,
+    source: "Estimated sector benchmark"
+  };
 }
 
 function normalizeAsset(asset) {
@@ -660,13 +954,22 @@ function normalizeAsset(asset) {
   const historyValues = history.map((point) => numberOrNull(point.close)).filter((value) => value !== null);
   const historyHigh = historyValues.length ? Math.max(...historyValues) : null;
   const historyLow = historyValues.length ? Math.min(...historyValues) : null;
+  const sector = asset.sector || catalog.sector || "Unknown";
+  const benchmarks = estimatedBenchmarks(sector);
+  const sources = normalizeSources(asset.sources || {}, {
+    historyHigh,
+    historyLow,
+    sector
+  });
+  const generatedAt = new Date().toISOString();
   return {
     symbol: asset.symbol,
     name: asset.name || catalog.name || asset.symbol,
     assetType: normalizeType(asset.assetType || catalog.assetType),
     exchange: asset.exchange || catalog.exchange || "Unknown",
-    sector: asset.sector || catalog.sector || "Unknown",
+    sector,
     industry: asset.industry || catalog.industry || "Unknown",
+    logo: asset.logo || "",
     currency: asset.currency || "USD",
     price,
     previousClose,
@@ -688,12 +991,19 @@ function normalizeAsset(asset) {
     revenueGrowth: numberOrNull(asset.revenueGrowth),
     earningsGrowth: numberOrNull(asset.earningsGrowth),
     profitMargin: numberOrNull(asset.profitMargin),
+    operatingMargin: numberOrNull(asset.operatingMargin),
     debtToEquity: numberOrNull(asset.debtToEquity),
+    returnOnEquity: numberOrNull(asset.returnOnEquity),
     currentRatio: numberOrNull(asset.currentRatio),
     beta: numberOrNull(asset.beta),
     analystRating: asset.analystRating || null,
     targetMeanPrice: numberOrNull(asset.targetMeanPrice),
-    sectorPe: numberOrNull(asset.sectorPe ?? SECTOR_PE[asset.sector || catalog.sector]),
+    sectorPe: numberOrNull(asset.sectorPe ?? benchmarks.pe),
+    sectorBenchmark: benchmarks,
+    benchmarkSource: "Estimated sector benchmark",
+    nextEarningsDate: asset.nextEarningsDate || null,
+    earningsSurprise: numberOrNull(asset.earningsSurprise),
+    recentEarningsPeriod: asset.recentEarningsPeriod || null,
     style: asset.style || catalog.style || inferStyle(asset.sector, asset.beta, asset.peRatio),
     summary: asset.summary || "",
     marketState: asset.marketState || "Unknown",
@@ -702,6 +1012,16 @@ function normalizeAsset(asset) {
     provider: asset.provider,
     live: Boolean(asset.live && price),
     lastUpdated: asset.lastUpdated || new Date().toISOString(),
+    fundamentalsUpdatedAt: asset.fundamentalsUpdatedAt || null,
+    analysisGeneratedAt: generatedAt,
+    freshness: {
+      priceData: asset.lastUpdated || generatedAt,
+      fundamentals: asset.fundamentalsUpdatedAt || null,
+      analysisGenerated: generatedAt,
+      note: "Price data can update intraday. Fundamental metrics may lag quarterly filings even when price data is live."
+    },
+    sources,
+    missingReasons: missingReasons(sources, asset),
     sourceNote: asset.sourceNote || ""
   };
 }
@@ -810,6 +1130,14 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function firstMetric(metrics, keys) {
+  for (const key of keys) {
+    const value = numberOrNull(metrics[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
 function raw(value) {
   return numberOrNull(value);
 }
@@ -823,6 +1151,12 @@ function percentMaybe(value) {
   const number = numberOrNull(value);
   if (number === null) return null;
   return Math.abs(number) <= 1 ? number * 100 : number;
+}
+
+function normalizeAverageVolume(value) {
+  const number = numberOrNull(value);
+  if (number === null) return null;
+  return Math.abs(number) < 10_000 ? Math.round(number * 1_000_000) : Math.round(number);
 }
 
 function parsePercent(value) {
@@ -859,11 +1193,30 @@ async function fetchJson(url) {
         Accept: "application/json,text/plain,*/*"
       }
     });
-    if (!response.ok) throw new Error(`${url.hostname} returned ${response.status}`);
+    if (response.status === 429) throw new Error("Provider rate limit reached. Try again shortly.");
+    if (!response.ok) throw new Error(`${url.hostname} temporarily unavailable.`);
     return response.json();
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function userSafeError(error) {
+  const message = String(error?.message || error || "");
+  if (message.includes("429") || message.toLowerCase().includes("rate limit")) return "Provider rate limit reached. Try again shortly.";
+  if (message.toLowerCase().includes("abort")) return "Market data provider timed out. Some data is temporarily unavailable.";
+  if (message.toLowerCase().includes("api_key") || message.toLowerCase().includes("token")) return "Provider key is not configured for this data source.";
+  if (message.toLowerCase().includes("not configured")) return message;
+  return message || "Some data is temporarily unavailable.";
+}
+
+function structuredError(message, code = "provider_error") {
+  return {
+    error: message,
+    code,
+    provider: provider.name,
+    timestamp: new Date().toISOString()
+  };
 }
 
 async function serveStatic(pathname, response) {
