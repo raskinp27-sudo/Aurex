@@ -11,6 +11,7 @@ Each major metric includes a source label, such as `Finnhub`, `Yahoo chart quote
 - `/` - premium product homepage with a live asset preview
 - `/app` - main research dashboard
 - `/api/health` - provider and environment status
+- `/api/provider-status` - provider health and cache diagnostics
 - `/api/search?q=apple` - provider-backed asset search
 - `/api/asset/AAPL` - normalized asset quote, fundamentals, history, and news
 - `/api/assets?symbols=AAPL,MSFT,NVDA` - batch asset lookup
@@ -43,7 +44,9 @@ node --check server.js && node --check app.js
 
 ## Market Data Providers
 
-The default mode is `MARKET_PROVIDER=auto`. It uses Yahoo-compatible search/history/news data as the resilient base. When `FINNHUB_API_KEY` is available, Aurex uses Finnhub first for quote, profile, and basic financial metrics including current price, daily change, day range, market cap, P/E, EPS, beta, margins, dividend yield, debt-to-equity, ROE, and 52-week data. Without keys, it falls back to the no-key Yahoo-compatible search/chart plus Stooq delayed quote path.
+The default mode is `MARKET_PROVIDER=auto`. When `FINNHUB_API_KEY` is available, Finnhub supplies the primary quote and first-pass fundamentals. Aurex then fills only missing fields from Yahoo fundamentals and optional keyed providers. Lower-priority providers never replace a valid higher-priority value. Without a Finnhub key, Yahoo-compatible quote, fundamentals, history, and news become the primary path, with Stooq as the final delayed-quote fallback.
+
+Field-level enrichment can combine valuation, profitability, growth, balance-sheet, risk, shareholder, and analyst metrics from different providers in one normalized asset response. Each populated field retains its source. Missing fields include provider attempts and an unavailable reason in `metricDiagnostics`.
 
 Environment variables:
 
@@ -51,6 +54,7 @@ Environment variables:
 MARKET_PROVIDER=auto
 FINNHUB_API_KEY=your_key
 ALPHA_VANTAGE_API_KEY=your_key
+FMP_API_KEY=your_key
 POLYGON_API_KEY=your_key
 TWELVE_DATA_API_KEY=your_key
 PORT=4174
@@ -79,7 +83,7 @@ Use `.env.example` as the environment variable checklist. The app still runs wit
    - Start command: `npm start`
 4. Add environment variables in Render:
 - `MARKET_PROVIDER=auto`
-- `FINNHUB_API_KEY`, `ALPHA_VANTAGE_API_KEY`, or both if available
+- `FINNHUB_API_KEY`, plus optional `ALPHA_VANTAGE_API_KEY`, `FMP_API_KEY`, and `POLYGON_API_KEY`
 5. Deploy. Render will provide `PORT`; the server reads it automatically.
 
 ## Deployment: Vercel
@@ -90,7 +94,7 @@ This repository includes `vercel.json` routing all requests to `server.js`, whic
 2. Keep the default install command unless your account requires a specific package manager.
 3. Add environment variables:
    - `MARKET_PROVIDER=auto`
-   - `FINNHUB_API_KEY`, `ALPHA_VANTAGE_API_KEY`, or both if available
+   - `FINNHUB_API_KEY`, plus optional `ALPHA_VANTAGE_API_KEY`, `FMP_API_KEY`, and `POLYGON_API_KEY`
 4. Deploy.
 
 For the most predictable deployment of this plain Node server, Render is the simpler target. Vercel is configured for serverless deployment through the included Node handler.

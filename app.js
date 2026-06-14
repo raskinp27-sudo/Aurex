@@ -17,8 +17,11 @@ const CATEGORY_WEIGHTS = {
 
 const CONFIDENCE_FIELDS = [
   "price", "previousClose", "volume", "week52High", "week52Low", "marketCap", "peRatio",
-  "forwardPe", "priceToBook", "eps", "revenueGrowth", "earningsGrowth", "profitMargin",
-  "operatingMargin", "debtToEquity", "returnOnEquity", "beta", "dividendYield"
+  "forwardPe", "pegRatio", "priceToBook", "evToEbitda", "evToSales", "eps",
+  "revenueGrowth", "earningsGrowth", "freeCashFlowGrowth", "grossMargin", "profitMargin",
+  "operatingMargin", "debtToEquity", "returnOnEquity", "returnOnAssets", "currentRatio",
+  "quickRatio", "cashPerShare", "beta", "volatility", "institutionalOwnership",
+  "shortInterest", "dividendYield", "payoutRatio", "targetMeanPrice"
 ];
 
 const DATA_QUALITY_FIELDS = [
@@ -238,26 +241,40 @@ function scoreAsset(asset) {
   const balanceSheet = average([
     asset.debtToEquity !== null ? clamp(100 - asset.debtToEquity * 42) : 50,
     asset.currentRatio !== null ? clamp(asset.currentRatio * 36, 20, 100) : 50,
+    asset.quickRatio !== null ? clamp(asset.quickRatio * 42, 15, 100) : 50,
     asset.returnOnEquity !== null ? clamp(42 + asset.returnOnEquity * 1.4, 0, 100) : 50,
+    asset.returnOnAssets !== null ? clamp(45 + asset.returnOnAssets * 2.2, 0, 100) : 50,
+    asset.cashPerShare !== null && asset.price ? clamp(40 + (asset.cashPerShare / asset.price) * 180, 20, 100) : 50,
     asset.marketCap !== null ? clamp(Math.log10(Math.max(asset.marketCap, 1) / 1_000_000_000) * 18 + 38, 25, 100) : 50
   ]);
   const valuation = average([
     asset.peRatio !== null && asset.sectorPe ? scorePe(asset.peRatio, asset.sectorPe) : asset.peRatio !== null ? scoreAbsolutePe(asset.peRatio) : 50,
     asset.forwardPe !== null && asset.sectorPe ? scorePe(asset.forwardPe, asset.sectorPe) : asset.forwardPe !== null ? scoreAbsolutePe(asset.forwardPe) : 50,
-    asset.priceToBook !== null ? clamp(95 - asset.priceToBook * 8, 10, 100) : 50
+    asset.priceToBook !== null ? clamp(95 - asset.priceToBook * 8, 10, 100) : 50,
+    asset.pegRatio !== null ? scorePeg(asset.pegRatio) : 50,
+    asset.evToEbitda !== null ? clamp(95 - asset.evToEbitda * 3.2, 5, 100) : 50,
+    asset.evToSales !== null ? clamp(92 - asset.evToSales * 7, 5, 100) : 50
   ]);
   const growth = average([
     asset.revenueGrowth !== null ? clamp(48 + asset.revenueGrowth * 2.1, 0, 100) : 50,
-    asset.earningsGrowth !== null ? clamp(48 + asset.earningsGrowth * 1.35, 0, 100) : 50
+    asset.earningsGrowth !== null ? clamp(48 + asset.earningsGrowth * 1.35, 0, 100) : 50,
+    asset.freeCashFlowGrowth !== null ? clamp(48 + asset.freeCashFlowGrowth * 1.1, 0, 100) : 50,
+    analystSignalScore(asset)
   ]);
   const profitability = average([
     asset.profitMargin !== null ? clamp(34 + asset.profitMargin * 2.2, 0, 100) : 50,
     asset.operatingMargin !== null ? clamp(34 + asset.operatingMargin * 1.8, 0, 100) : 50,
+    asset.grossMargin !== null ? clamp(28 + asset.grossMargin * 1.2, 0, 100) : 50,
+    asset.returnOnEquity !== null ? clamp(42 + asset.returnOnEquity * 1.4, 0, 100) : 50,
+    asset.returnOnAssets !== null ? clamp(45 + asset.returnOnAssets * 2.2, 0, 100) : 50,
     asset.sectorBenchmark?.profitMargin && asset.profitMargin !== null ? clamp(50 + (asset.profitMargin - asset.sectorBenchmark.profitMargin) * 2, 0, 100) : 50
   ]);
   const risk = average([
-    asset.beta !== null ? clamp(100 - Math.max(0, asset.beta - 0.75) * 38, 10, 100) : riskFallback(asset) ? clamp(100 - Math.max(0, riskFallback(asset) - 0.75) * 38, 10, 100) : 50,
+    clamp(100 - Math.max(0, effectiveBeta(asset) - 0.75) * 38, 10, 100),
+    asset.volatility !== null ? clamp(100 - Math.max(0, asset.volatility - 15) * 1.7, 5, 100) : 50,
     asset.debtToEquity !== null ? clamp(95 - asset.debtToEquity * 35, 0, 100) : 50,
+    asset.shortInterest !== null ? clamp(92 - asset.shortInterest * 2.5, 5, 100) : 50,
+    asset.institutionalOwnership !== null ? clamp(45 + Math.min(asset.institutionalOwnership, 85) * 0.45, 35, 85) : 50,
     historyRiskScore(asset.history)
   ]);
   const newsSentiment = newsScore(asset.news);
@@ -287,6 +304,29 @@ function scoreAbsolutePe(pe) {
   if (pe < 25) return 72;
   if (pe < 40) return 55;
   return clamp(55 - (pe - 40) * 0.7, 10, 55);
+}
+
+function scorePeg(peg) {
+  if (peg <= 0) return 40;
+  if (peg <= 1) return 88;
+  if (peg <= 1.5) return 72;
+  if (peg <= 2.5) return 52;
+  return clamp(52 - (peg - 2.5) * 8, 10, 52);
+}
+
+function analystSignalScore(asset) {
+  const trend = asset.recommendationTrend;
+  const counts = trend && typeof trend === "object"
+    ? [trend.strongBuy, trend.buy, trend.hold, trend.sell, trend.strongSell].map((value) => Number(value) || 0)
+    : [];
+  const total = counts.reduce((sum, value) => sum + value, 0);
+  const trendScore = total
+    ? (counts[0] * 95 + counts[1] * 78 + counts[2] * 52 + counts[3] * 28 + counts[4] * 10) / total
+    : null;
+  const targetScore = isRealNumber(asset.targetMeanPrice) && isRealNumber(asset.price) && asset.price > 0
+    ? clamp(50 + ((asset.targetMeanPrice - asset.price) / asset.price) * 120, 10, 95)
+    : null;
+  return average([trendScore, targetScore].filter((value) => value !== null));
 }
 
 function historyRiskScore(history) {
@@ -385,8 +425,12 @@ function buildResearch(asset, score) {
   if (!weaknesses.length) weaknesses.push("No severe weakness stands out in the currently available provider data.");
 
   if (asset.beta !== null && asset.beta > 1.35) risks.push(`Higher beta of ${number(asset.beta, 2)} can increase volatility.`);
-  if (asset.beta === null) risks.push("Beta unavailable; volatility is inferred from recent price movement instead.");
+  if (asset.beta === null && asset.volatility !== null) risks.push(`Beta is unavailable; annualized historical volatility of ${number(asset.volatility, 1)}% is used instead.`);
+  if (asset.beta === null && asset.volatility === null) risks.push("Beta unavailable; volatility is inferred from the available asset profile.");
   if (asset.debtToEquity !== null && asset.debtToEquity > 1.2) risks.push(`Debt-to-equity of ${number(asset.debtToEquity, 2)} raises balance-sheet sensitivity.`);
+  if (asset.shortInterest !== null && asset.shortInterest > 10) risks.push(`Short interest of ${number(asset.shortInterest, 1)}% signals elevated bearish positioning.`);
+  if (asset.quickRatio !== null && asset.quickRatio < 0.8) risks.push(`Quick ratio of ${number(asset.quickRatio, 2)} indicates tighter near-term liquidity.`);
+  if (asset.payoutRatio !== null && asset.payoutRatio > 85) risks.push(`A payout ratio of ${number(asset.payoutRatio, 1)}% may limit dividend flexibility.`);
   if (asset.changePercent !== null && asset.changePercent < -3) risks.push("Large daily decline may indicate fresh market concern.");
   if (asset.assetType === "CRYPTOCURRENCY") risks.push("Crypto assets can have large drawdowns and weaker fundamental comparability.");
   if (score.categories.newsSentiment < 45) risks.push("Recent news sentiment is a drag on the model.");
@@ -394,6 +438,8 @@ function buildResearch(asset, score) {
 
   if (asset.targetMeanPrice && asset.price && asset.targetMeanPrice > asset.price) catalysts.push("Analyst target price sits above the current quote.");
   if (asset.revenueGrowth !== null && asset.revenueGrowth > 10) catalysts.push("Double-digit revenue growth could support earnings revisions.");
+  if (asset.freeCashFlowGrowth !== null && asset.freeCashFlowGrowth > 10) catalysts.push("Free cash flow growth provides additional support for reinvestment or shareholder returns.");
+  if (asset.institutionalOwnership !== null && asset.institutionalOwnership > 60) catalysts.push("Broad institutional ownership can support liquidity and research coverage.");
   if (asset.news?.some((item) => item.sentiment === "positive")) catalysts.push("Positive recent headlines may improve investor sentiment.");
   if (asset.assetType === "ETF") catalysts.push("ETF structure can add diversification versus a single-stock position.");
   if (!catalysts.length) catalysts.push("Catalysts depend on upcoming earnings, margin trends, and broader sector momentum.");
@@ -481,22 +527,36 @@ function fairValueEstimate(asset) {
     };
   }
   const sectorPe = isRealNumber(asset.sectorBenchmark?.pe) ? asset.sectorBenchmark.pe : isRealNumber(asset.peRatio) ? asset.peRatio : 18;
-  const growthPremium = isRealNumber(asset.revenueGrowth) ? clamp(asset.revenueGrowth / 100, -0.25, 0.35) : 0;
+  const growthInputs = [asset.revenueGrowth, asset.earningsGrowth, asset.freeCashFlowGrowth]
+    .filter(isRealNumber);
+  const blendedGrowth = growthInputs.length ? growthInputs.reduce((sum, value) => sum + Number(value), 0) / growthInputs.length : null;
+  const growthPremium = blendedGrowth !== null ? clamp(blendedGrowth / 100, -0.25, 0.35) : 0;
   const marginPremium = isRealNumber(asset.profitMargin) && isRealNumber(asset.sectorBenchmark?.profitMargin)
     ? clamp((asset.profitMargin - asset.sectorBenchmark.profitMargin) / 100, -0.2, 0.25)
     : 0;
-  const riskDiscount = (asset.beta ?? riskFallback(asset)) > 1.3 ? -0.08 : 0;
-  const fairPe = clamp(sectorPe * (1 + growthPremium + marginPremium + riskDiscount), 8, 55);
+  const qualityPremium = average([
+    isRealNumber(asset.returnOnEquity) ? clamp(asset.returnOnEquity / 100, -0.1, 0.2) : 0,
+    isRealNumber(asset.returnOnAssets) ? clamp(asset.returnOnAssets / 80, -0.1, 0.15) : 0
+  ]);
+  const valuationDiscount = average([
+    isRealNumber(asset.pegRatio) ? clamp((1.5 - asset.pegRatio) * 0.06, -0.12, 0.08) : 0,
+    isRealNumber(asset.evToEbitda) ? clamp((14 - asset.evToEbitda) * 0.008, -0.1, 0.08) : 0,
+    isRealNumber(asset.evToSales) ? clamp((4 - asset.evToSales) * 0.012, -0.08, 0.06) : 0
+  ]);
+  const riskDiscount = effectiveBeta(asset) > 1.3 ? -0.08 : 0;
+  const fairPe = clamp(sectorPe * (1 + growthPremium + marginPremium + qualityPremium + valuationDiscount + riskDiscount), 8, 55);
   const center = asset.eps * fairPe;
-  const low = center * 0.88;
-  const high = center * 1.12;
+  const analystCenter = isRealNumber(asset.targetMeanPrice) ? Number(asset.targetMeanPrice) : center;
+  const blendedCenter = center * 0.8 + analystCenter * 0.2;
+  const low = blendedCenter * 0.88;
+  const high = blendedCenter * 1.12;
   const status = asset.price < low ? "below" : asset.price > high ? "above" : "near";
   const mos = status === "below"
     ? `Price appears below the educational range, implying a possible margin of safety if assumptions hold.`
     : status === "above"
       ? "Price appears above the educational range, which lowers margin of safety."
       : "Price appears near the educational range, so margin of safety looks limited but not stretched.";
-  return { available: true, low, high, center, status, copy: mos };
+  return { available: true, low, high, center: blendedCenter, status, copy: mos };
 }
 
 async function loadHealth() {
@@ -1273,7 +1333,7 @@ function scoreDiversification(holdings, totalValue) {
   const sectorScore = clamp(21 - Math.max(0, topSectorValue.percent - 35) * 0.85, 0, 21);
   const typeCount = new Set(holdings.map((holding) => holding.asset.assetType || "Unknown")).size;
   const typeScore = clamp((typeCount / 4) * 12, 0, 12);
-  const averageBeta = holdings.length ? holdings.reduce((sum, holding) => sum + (holding.asset.beta ?? riskFallback(holding.asset)), 0) / holdings.length : 1;
+  const averageBeta = holdings.length ? holdings.reduce((sum, holding) => sum + effectiveBeta(holding.asset), 0) / holdings.length : 1;
   const riskTarget = state.portfolio.riskTolerance === "Conservative" ? 0.85 : state.portfolio.riskTolerance === "Aggressive" ? 1.35 : 1.05;
   const riskScore = clamp(13 - Math.max(0, averageBeta - riskTarget) * 18, 0, 13);
   const overlapPenalty = similarHoldingPenalty(holdings);
@@ -1347,7 +1407,7 @@ function renderPortfolioAware(asset, standaloneScore) {
     verdict = "Hold";
     reasons.push(`For this portfolio, it becomes a Hold because ${asset.sector} already makes up ${sectorPct.toFixed(1)}% of holdings.`);
   }
-  if (verdict === "Buy" && (asset.beta ?? riskFallback(asset)) > 1.35 && state.portfolio.riskTolerance === "Conservative") {
+  if (verdict === "Buy" && effectiveBeta(asset) > 1.35 && state.portfolio.riskTolerance === "Conservative") {
     verdict = "Hold";
     reasons.push("The asset's risk profile is high relative to a conservative tolerance.");
   }
@@ -1359,7 +1419,7 @@ function renderPortfolioAware(asset, standaloneScore) {
     verdict = "Hold";
     reasons.push("Available virtual cash is below one current share price.");
   }
-  if (state.portfolio.investmentHorizon === "Under 1 year" && (asset.beta ?? riskFallback(asset)) > 1.25 && verdict === "Buy") {
+  if (state.portfolio.investmentHorizon === "Under 1 year" && effectiveBeta(asset) > 1.25 && verdict === "Buy") {
     verdict = "Hold";
     reasons.push("A shorter horizon reduces tolerance for high-volatility assets.");
   }
@@ -1384,7 +1444,7 @@ function portfolioFitScore(asset) {
   });
   const total = holdings.reduce((sum, holding) => sum + holding.value, 0) || state.portfolio.startingCash || 1;
   const sectorPct = holdings.filter((holding) => holding.asset?.sector === asset.sector).reduce((sum, holding) => sum + holding.value, 0) / total * 100;
-  const beta = asset.beta ?? riskFallback(asset);
+  const beta = effectiveBeta(asset);
   const riskTarget = state.portfolio.riskTolerance === "Conservative" ? 0.85 : state.portfolio.riskTolerance === "Aggressive" ? 1.35 : 1.05;
   return Math.round(clamp(92 - Math.max(0, sectorPct - 30) * 0.8 - Math.max(0, beta - riskTarget) * 18, 20, 100));
 }
@@ -1453,10 +1513,19 @@ function topSector(holdings, totalValue) {
 }
 
 function riskFallback(asset) {
+  if (isRealNumber(asset?.volatility)) return clamp(0.55 + Number(asset.volatility) / 55, 0.55, 1.8);
   if (asset.assetType === "CRYPTOCURRENCY") return 1.8;
   if (asset.style?.toLowerCase().includes("defensive")) return 0.75;
   if (asset.style?.toLowerCase().includes("growth")) return 1.2;
   return 1;
+}
+
+function effectiveBeta(asset = {}) {
+  const beta = isRealNumber(asset.beta) ? Number(asset.beta) : riskFallback(asset);
+  const debtPenalty = isRealNumber(asset.debtToEquity) ? Math.max(0, Number(asset.debtToEquity) - 1) * 0.08 : 0;
+  const shortPenalty = isRealNumber(asset.shortInterest) ? Math.max(0, Number(asset.shortInterest) - 8) * 0.006 : 0;
+  const ownershipOffset = isRealNumber(asset.institutionalOwnership) ? Math.min(Number(asset.institutionalOwnership), 80) * 0.0008 : 0;
+  return clamp(beta + debtPenalty + shortPenalty - ownershipOffset, 0.4, 2.5);
 }
 
 function styleBucket(style = "") {
