@@ -44,6 +44,8 @@ const FUNDAMENTAL_FIELDS = [
   "quickRatio", "cashPerShare", "beta", "volatility", "institutionalOwnership", "shortInterest",
   "analystRating", "recommendationTrend", "targetMeanPrice", "nextEarningsDate", "earningsSurprise"
 ];
+const ETF_FUNDAMENTAL_FIELDS = ["expenseRatio", "etfHoldings"];
+const MERGEABLE_FUNDAMENTAL_FIELDS = [...FUNDAMENTAL_FIELDS, ...ETF_FUNDAMENTAL_FIELDS];
 let YAHOO_SESSION = null;
 let YAHOO_SESSION_PROMISE = null;
 
@@ -215,17 +217,15 @@ class HybridMarketProvider extends MarketProvider {
     }
 
     const optionalEnrichers = [
+      ["FMP", Boolean(this.fmpProvider), () => this.fmpProvider.getFundamentalOverlay(normalized, asset)],
       ["Alpha Vantage", Boolean(this.alphaVantageProvider), () => this.alphaVantageProvider.getFundamentalOverlay(normalized)],
-      ["Financial Modeling Prep", Boolean(this.fmpProvider), () => this.fmpProvider.getFundamentalOverlay(normalized)],
       ["Polygon", Boolean(this.polygonProvider), () => this.polygonProvider.getFundamentalOverlay(normalized, asset)]
     ];
-    const optionalAttempts = await Promise.all(optionalEnrichers.map(([name, configured, loader]) => {
-      return runEnricher(name, configured, loader);
-    }));
-    optionalAttempts.forEach((attempt) => {
+    for (const [name, configured, loader] of optionalEnrichers) {
+      const attempt = await runEnricher(name, configured, loader);
       attempts.push(attempt);
       asset = mergeMissingAssetFields(asset, attempt.overlay);
-    });
+    }
 
     return finalizeAssetCoverage(asset, attempts);
   }
@@ -616,9 +616,11 @@ class YahooFinanceProvider extends MarketProvider {
       industry: profile.industry || catalog.industry || "Unknown",
       summary: profile.longBusinessSummary,
       profitMargin: mappings.profitMargin.value,
+      operatingMargin: mappings.operatingMargin.value,
       revenueGrowth: mappings.revenueGrowth.value,
       earningsGrowth: mappings.earningsGrowth.value,
       debtToEquity: mappings.debtToEquity.value,
+      returnOnEquity: mappings.returnOnEquity.value,
       currentRatio: mappings.currentRatio.value,
       quickRatio: mappings.quickRatio.value,
       cashPerShare: mappings.cashPerShare.value,
@@ -1401,21 +1403,22 @@ class AlphaVantageProvider extends MarketProvider {
 
 class FinancialModelingPrepProvider extends MarketProvider {
   constructor(apiKey) {
-    super("Financial Modeling Prep");
+    super("FMP");
     this.apiKey = String(apiKey || "").trim();
   }
 
-  async request(pathname, params = {}) {
+  async request(pathname, params = {}, requestOptions = {}) {
     if (!this.apiKey) throw new Error("FMP_API_KEY is not configured");
     const url = new URL(pathname, "https://financialmodelingprep.com/stable/");
     Object.entries({ ...params, apikey: this.apiKey }).forEach(([key, value]) => url.searchParams.set(key, value));
     const json = await fetchJson(url, {
-      providerName: "Financial Modeling Prep",
-      operation: pathname
+      providerName: "FMP",
+      operation: pathname,
+      ...requestOptions
     });
     if (json?.["Error Message"] || json?.error) {
       throw providerError(
-        "Financial Modeling Prep",
+        "FMP",
         pathname,
         /limit/i.test(json["Error Message"] || json.error) ? "rate_limit" : "invalid_response",
         null,
@@ -1425,7 +1428,18 @@ class FinancialModelingPrepProvider extends MarketProvider {
     return json;
   }
 
-  async getFundamentalOverlay(symbol) {
+  async probe() {
+    return cached("fmp-health:AAPL", QUOTE_TTL_MS, async () => {
+      const payload = await this.request("profile", { symbol: "AAPL" }, { healthCritical: true });
+      const profile = firstObject(payload);
+      if (!profile.symbol && !profile.companyName && !profile.price) {
+        throw providerError("FMP", "profile", "invalid_response", null, "FMP returned an empty profile.");
+      }
+      return true;
+    });
+  }
+
+  async getFundamentalOverlay(symbol, asset = {}) {
     return cached(`fmp-fundamentals:${symbol}`, FUNDAMENTAL_TTL_MS, async () => {
       const endpoints = [
         ["profile", "profile"],
@@ -1433,23 +1447,32 @@ class FinancialModelingPrepProvider extends MarketProvider {
         ["keyMetrics", "key-metrics-ttm"],
         ["growth", "financial-growth"],
         ["estimates", "analyst-estimates"],
-        ["consensus", "grades-consensus"]
+        ["consensus", "grades-consensus"],
+        ["priceTarget", "price-target-consensus"],
+        ["earnings", "earnings"]
       ];
+      if (isEtfAsset(asset, symbol)) {
+        endpoints.push(["etfInfo", "etf/info"], ["etfHoldings", "etf/holdings"]);
+      }
       const settled = await Promise.allSettled(endpoints.map(([, endpoint]) => {
-        return this.request(endpoint, { symbol, limit: "5" });
+        return this.request(endpoint, { symbol });
       }));
       const payloads = Object.fromEntries(endpoints.map(([key], index) => {
-        return [key, settled[index].status === "fulfilled" ? firstObject(settled[index].value) : {}];
+        if (settled[index].status !== "fulfilled") return [key, key === "etfHoldings" ? [] : {}];
+        return [key, key === "etfHoldings" ? arrayPayload(settled[index].value) : firstObject(settled[index].value)];
       }));
       if (settled.every((result) => result.status === "rejected")) throw settled[0].reason;
-      const { profile, ratios, keyMetrics, growth, estimates, consensus } = payloads;
+      const {
+        profile = {}, ratios = {}, keyMetrics = {}, growth = {}, estimates = {}, consensus = {},
+        priceTarget = {}, earnings = {}, etfInfo = {}, etfHoldings = []
+      } = payloads;
       const mappings = {
         marketCap: candidateEntry([["profile.marketCap", profile.marketCap], ["key-metrics-ttm.marketCapTTM", keyMetrics.marketCapTTM]]),
         peRatio: candidateEntry([["ratios-ttm.priceToEarningsRatioTTM", ratios.priceToEarningsRatioTTM], ["ratios-ttm.peRatioTTM", ratios.peRatioTTM]]),
         forwardPe: candidateEntry([["analyst-estimates.estimatedEpsAvg/current price", estimates.estimatedEpsAvg && profile.price ? profile.price / estimates.estimatedEpsAvg : null]]),
         pegRatio: candidateEntry([["ratios-ttm.priceToEarningsGrowthRatioTTM", ratios.priceToEarningsGrowthRatioTTM], ["ratios-ttm.pegRatioTTM", ratios.pegRatioTTM]]),
-        priceToBook: candidateEntry([["ratios-ttm.priceToBookRatioTTM", ratios.priceToBookRatioTTM]]),
-        evToEbitda: candidateEntry([["key-metrics-ttm.enterpriseValueOverEBITDATTM", keyMetrics.enterpriseValueOverEBITDATTM], ["ratios-ttm.enterpriseValueMultipleTTM", ratios.enterpriseValueMultipleTTM]]),
+        priceToBook: candidateEntry([["ratios-ttm.priceToBookRatioTTM", ratios.priceToBookRatioTTM], ["ratios-ttm.priceBookValueRatioTTM", ratios.priceBookValueRatioTTM]]),
+        evToEbitda: candidateEntry([["key-metrics-ttm.enterpriseValueOverEBITDATTM", keyMetrics.enterpriseValueOverEBITDATTM], ["key-metrics-ttm.evToEBITDATTM", keyMetrics.evToEBITDATTM], ["ratios-ttm.enterpriseValueMultipleTTM", ratios.enterpriseValueMultipleTTM]]),
         evToSales: candidateEntry([["key-metrics-ttm.evToSalesTTM", keyMetrics.evToSalesTTM], ["ratios-ttm.enterpriseValueToSalesRatioTTM", ratios.enterpriseValueToSalesRatioTTM]]),
         dividendYield: candidateEntry([["ratios-ttm.dividendYieldTTM", ratios.dividendYieldTTM]], percentMaybe),
         payoutRatio: candidateEntry([["ratios-ttm.payoutRatioTTM", ratios.payoutRatioTTM]], percentMaybe),
@@ -1459,28 +1482,36 @@ class FinancialModelingPrepProvider extends MarketProvider {
         grossMargin: candidateEntry([["ratios-ttm.grossProfitMarginTTM", ratios.grossProfitMarginTTM]], percentMaybe),
         operatingMargin: candidateEntry([["ratios-ttm.operatingProfitMarginTTM", ratios.operatingProfitMarginTTM]], percentMaybe),
         profitMargin: candidateEntry([["ratios-ttm.netProfitMarginTTM", ratios.netProfitMarginTTM]], percentMaybe),
-        debtToEquity: candidateEntry([["ratios-ttm.debtToEquityRatioTTM", ratios.debtToEquityRatioTTM]], normalizeDebt),
-        returnOnEquity: candidateEntry([["ratios-ttm.returnOnEquityTTM", ratios.returnOnEquityTTM]], percentMaybe),
-        returnOnAssets: candidateEntry([["ratios-ttm.returnOnAssetsTTM", ratios.returnOnAssetsTTM]], percentMaybe),
+        debtToEquity: candidateEntry([["ratios-ttm.debtToEquityRatioTTM", ratios.debtToEquityRatioTTM], ["ratios-ttm.debtEquityRatioTTM", ratios.debtEquityRatioTTM]], normalizeDebt),
+        returnOnEquity: candidateEntry([["ratios-ttm.returnOnEquityRatioTTM", ratios.returnOnEquityRatioTTM], ["ratios-ttm.returnOnEquityTTM", ratios.returnOnEquityTTM]], percentMaybe),
+        returnOnAssets: candidateEntry([["ratios-ttm.returnOnAssetsRatioTTM", ratios.returnOnAssetsRatioTTM], ["ratios-ttm.returnOnAssetsTTM", ratios.returnOnAssetsTTM]], percentMaybe),
         currentRatio: candidateEntry([["ratios-ttm.currentRatioTTM", ratios.currentRatioTTM]]),
         quickRatio: candidateEntry([["ratios-ttm.quickRatioTTM", ratios.quickRatioTTM]]),
         cashPerShare: candidateEntry([["key-metrics-ttm.cashPerShareTTM", keyMetrics.cashPerShareTTM]]),
-        targetMeanPrice: candidateEntry([["analyst-estimates.estimatedPriceTargetAvg", estimates.estimatedPriceTargetAvg], ["analyst-estimates.estimatedPriceAvg", estimates.estimatedPriceAvg]]),
-        beta: candidateEntry([["profile.beta", profile.beta]])
+        targetMeanPrice: candidateEntry([["price-target-consensus.targetConsensus", priceTarget.targetConsensus], ["price-target-consensus.targetMedian", priceTarget.targetMedian], ["analyst-estimates.estimatedPriceTargetAvg", estimates.estimatedPriceTargetAvg], ["analyst-estimates.estimatedPriceAvg", estimates.estimatedPriceAvg]]),
+        earningsSurprise: candidateEntry([["earnings.surprisePercent", earnings.surprisePercent], ["earnings.epsSurprisePercent", earnings.epsSurprisePercent], ["earnings.epsActual vs epsEstimated", fmpEarningsSurprise(earnings)]]),
+        beta: candidateEntry([["profile.beta", profile.beta]]),
+        expenseRatio: candidateEntry([["etf/info.expenseRatio", etfInfo.expenseRatio], ["etf/info.expenseRatioPercentage", etfInfo.expenseRatioPercentage], ["etf/info.netExpenseRatio", etfInfo.netExpenseRatio]])
       };
-      logMetricMappings("Financial Modeling Prep", symbol, mappings, {
+      logMetricMappings("FMP", symbol, mappings, {
         profileFields: Object.keys(profile),
         ratioFields: Object.keys(ratios),
         keyMetricFields: Object.keys(keyMetrics),
         growthFields: Object.keys(growth),
         estimateFields: Object.keys(estimates),
-        consensusFields: Object.keys(consensus)
+        consensusFields: Object.keys(consensus),
+        priceTargetFields: Object.keys(priceTarget),
+        earningsFields: Object.keys(earnings),
+        etfInfoFields: Object.keys(etfInfo || {}),
+        etfHoldingFields: Object.keys(etfHoldings?.[0] || {})
       });
       const values = mappingValues(mappings);
       const analystRating = consensus.consensus || consensus.rating || null;
       const recommendationTrend = fmpRecommendationTrend(consensus);
+      const normalizedEtfHoldings = normalizeEtfHoldings(etfHoldings);
       return {
         ...values,
+        etfHoldings: normalizedEtfHoldings,
         name: profile.companyName || null,
         exchange: profile.exchangeShortName || profile.exchange || null,
         sector: profile.sector || null,
@@ -1489,10 +1520,11 @@ class FinancialModelingPrepProvider extends MarketProvider {
         analystRating,
         recommendationTrend,
         fundamentalsUpdatedAt: new Date().toISOString(),
-        sources: sourceMapForAvailable("Financial Modeling Prep", {
+        sources: sourceMapForAvailable("FMP", {
           ...values,
           analystRating,
-          recommendationTrend
+          recommendationTrend,
+          etfHoldings: normalizedEtfHoldings
         })
       };
     });
@@ -1786,19 +1818,16 @@ function cacheStatsSnapshot() {
 
 async function probeConfiguredProvider() {
   if (provider instanceof HybridMarketProvider) {
+    const probes = [];
     if (provider.finnhubProvider) {
-      try {
-        await provider.finnhubProvider.getQuote("AAPL");
-      } catch {
-        // The request layer records the exact status and error.
-      }
+      probes.push(provider.finnhubProvider.getQuote("AAPL"));
     } else {
-      try {
-        await provider.quoteProvider.getQuote("AAPL");
-      } catch {
-        // The request layer records the exact status and error.
-      }
+      probes.push(provider.quoteProvider.getQuote("AAPL"));
     }
+    if (provider.fmpProvider && PROVIDER_HEALTH.fmp.working === null) {
+      probes.push(provider.fmpProvider.probe());
+    }
+    await Promise.allSettled(probes);
     return;
   }
   if (provider instanceof YahooFinanceProvider) {
@@ -1816,10 +1845,13 @@ function providerStatusSnapshot() {
     configuredProvider: MARKET_PROVIDER,
     finnhubConfigured: Boolean(FINNHUB_API_KEY),
     finnhubWorking: PROVIDER_HEALTH.finnhub.working,
+    fmpConfigured: Boolean(FMP_API_KEY),
+    fmpWorking: PROVIDER_HEALTH.fmp.working,
     yahooWorking: PROVIDER_HEALTH.yahoo.working,
     cacheStats: cacheStatsSnapshot(),
     checks: {
       finnhub: publicProviderHealth(PROVIDER_HEALTH.finnhub),
+      fmp: publicProviderHealth(PROVIDER_HEALTH.fmp),
       yahoo: publicProviderHealth(PROVIDER_HEALTH.yahoo)
     },
     timestamp: new Date().toISOString()
@@ -1897,8 +1929,10 @@ async function runEnricher(name, configured, loader) {
   if (!configured) return providerAttempt(name, "not_configured");
   try {
     const overlay = await loader();
+    recordProviderSuccess(name, "fundamental enrichment", true);
     return providerAttempt(name, "success", overlay);
   } catch (error) {
+    recordProviderFailure(name, "fundamental enrichment", error, true);
     console.warn(`[Aurex] ${name} enrichment unavailable: ${providerFailureDescription(error)}`);
     return providerAttempt(name, "error", null, error);
   }
@@ -1909,7 +1943,7 @@ function providerAttempt(providerName, status, overlay = null, error = null) {
     provider: providerName,
     status,
     overlay,
-    fieldsReturned: overlay ? FUNDAMENTAL_FIELDS.filter((field) => hasMetricValue(overlay[field])) : [],
+    fieldsReturned: overlay ? MERGEABLE_FUNDAMENTAL_FIELDS.filter((field) => hasMetricValue(overlay[field])) : [],
     reason: status === "not_configured"
       ? `${providerName} API key is not configured.`
       : error
@@ -1922,7 +1956,7 @@ function mergeMissingAssetFields(base, overlay) {
   if (!overlay || typeof overlay !== "object") return base;
   const merged = { ...base, sources: { ...(base.sources || {}) } };
   const mergeFields = [
-    ...FUNDAMENTAL_FIELDS,
+    ...MERGEABLE_FUNDAMENTAL_FIELDS,
     "name", "assetType", "exchange", "sector", "industry", "logo", "currency", "summary",
     "history", "news", "recentEarningsPeriod"
   ];
@@ -1958,7 +1992,7 @@ function publicProviderAttempt(attempt) {
 }
 
 function buildMetricDiagnostics(asset, attempts) {
-  return Object.fromEntries(FUNDAMENTAL_FIELDS
+  return Object.fromEntries(coverageFieldsForAsset(asset)
     .filter((field) => !hasMetricValue(asset[field]))
     .map((field) => {
       const providersChecked = attempts.map((attempt) => ({
@@ -2023,7 +2057,7 @@ function normalizeSources(sources, context = {}) {
 
 function missingReasons(sources, asset, metricDiagnostics = asset.metricDiagnostics || {}) {
   const fields = [
-    "price", "change", "changePercent", ...FUNDAMENTAL_FIELDS, "open", "dayHigh", "dayLow"
+    "price", "change", "changePercent", ...coverageFieldsForAsset(asset), "open", "dayHigh", "dayLow"
   ];
   return Object.fromEntries(fields.filter((field) => {
     return asset[field] === null || asset[field] === undefined || asset[field] === "";
@@ -2108,6 +2142,8 @@ function normalizeAsset(asset) {
     institutionalOwnership: numberOrNull(asset.institutionalOwnership),
     shortInterest: numberOrNull(asset.shortInterest),
     payoutRatio: numberOrNull(asset.payoutRatio),
+    expenseRatio: numberOrNull(asset.expenseRatio),
+    etfHoldings: normalizeEtfHoldings(asset.etfHoldings),
     analystRating: asset.analystRating || null,
     recommendationTrend: asset.recommendationTrend || null,
     targetMeanPrice: numberOrNull(asset.targetMeanPrice),
@@ -2431,6 +2467,54 @@ function percentMaybe(value) {
   return Math.abs(number) <= 1 ? number * 100 : number;
 }
 
+function coverageFieldsForAsset(asset = {}) {
+  return isEtfAsset(asset, asset.symbol)
+    ? MERGEABLE_FUNDAMENTAL_FIELDS
+    : FUNDAMENTAL_FIELDS;
+}
+
+function isEtfAsset(asset = {}, symbol = "") {
+  const catalog = CATALOG_BY_SYMBOL[normalizeSymbol(symbol || asset.symbol)] || {};
+  return normalizeType(asset.assetType || catalog.assetType) === "ETF"
+    || /exchange[ -]?traded fund|\betf\b/i.test(`${asset.name || ""} ${asset.industry || ""}`);
+}
+
+function arrayPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.holdings)) return payload.holdings;
+  return [];
+}
+
+function normalizeEtfHoldings(holdings) {
+  if (!Array.isArray(holdings)) return [];
+  return holdings.slice(0, 100).map((holding) => ({
+    symbol: holding.symbol || holding.asset || holding.holdingSymbol || null,
+    name: holding.name || holding.assetName || holding.holdingName || null,
+    weight: normalizeEtfWeight(holding),
+    shares: numberOrNull(holding.sharesNumber ?? holding.shares),
+    marketValue: numberOrNull(holding.marketValue)
+  })).filter((holding) => holding.symbol || holding.name);
+}
+
+function normalizeEtfWeight(holding) {
+  const percentage = holding?.weightPercentage;
+  if (percentage !== null && percentage !== undefined && percentage !== "") {
+    return numberOrNull(typeof percentage === "string" ? percentage.replace("%", "") : percentage);
+  }
+  if (holding?.weight !== null && holding?.weight !== undefined && holding?.weight !== "") {
+    return numberOrNull(typeof holding.weight === "string" ? holding.weight.replace("%", "") : holding.weight);
+  }
+  return percentMaybe(holding?.weighting);
+}
+
+function fmpEarningsSurprise(earnings) {
+  const actual = numberOrNull(earnings?.epsActual ?? earnings?.actualEarningResult);
+  const estimate = numberOrNull(earnings?.epsEstimated ?? earnings?.estimatedEarning);
+  if (actual === null || estimate === null || estimate === 0) return null;
+  return ((actual - estimate) / Math.abs(estimate)) * 100;
+}
+
 function normalizeAverageVolume(value) {
   const number = numberOrNull(value);
   if (number === null) return null;
@@ -2571,7 +2655,7 @@ function providerHealthKey(providerName) {
   if (normalized.includes("finnhub")) return "finnhub";
   if (normalized.includes("yahoo")) return "yahoo";
   if (normalized.includes("alpha vantage")) return "alphaVantage";
-  if (normalized.includes("financial modeling prep")) return "fmp";
+  if (normalized === "fmp" || normalized.includes("financial modeling prep")) return "fmp";
   if (normalized.includes("polygon")) return "polygon";
   return null;
 }

@@ -62,10 +62,17 @@ test("field-level enrichment maximizes coverage for the requested asset set", as
     assert.ok(asset.week52High > asset.week52Low);
     assert.ok(asset.volume > 0);
     assert.equal(asset.sources.price, "Finnhub");
-    assert.equal(asset.sources.beta, "Yahoo fundamentals");
+    assert.equal(asset.sources.peRatio, "Finnhub");
+    assert.equal(asset.sources.beta, asset.assetType === "ETF" ? "FMP" : "Yahoo fundamentals");
+    assert.equal(asset.sources.priceToBook, asset.assetType === "ETF" ? "FMP" : "Yahoo fundamentals");
+    assert.equal(
+      asset.sources.returnOnEquity,
+      ["SPY", "QQQ"].includes(asset.symbol) ? "FMP" : "Yahoo fundamentals",
+      `${asset.symbol} should preserve provider priority for ROE`
+    );
     assert.equal(asset.sources.pegRatio, "Alpha Vantage");
-    assert.equal(asset.sources.evToEbitda, "Financial Modeling Prep");
-    assert.equal(asset.sources.freeCashFlowGrowth, "Financial Modeling Prep");
+    assert.equal(asset.sources.evToEbitda, "FMP");
+    assert.equal(asset.sources.freeCashFlowGrowth, "FMP");
     assert.equal(asset.sources.grossMargin, "Polygon");
     assert.equal(asset.sources.currentRatio, "Polygon");
 
@@ -73,7 +80,7 @@ test("field-level enrichment maximizes coverage for the requested asset set", as
     assert.ok(diagnostic);
     assert.deepEqual(
       diagnostic.providersChecked.map((entry) => entry.provider),
-      ["Finnhub", "Yahoo", "Alpha Vantage", "Financial Modeling Prep", "Polygon"]
+      ["Finnhub", "Yahoo", "FMP", "Alpha Vantage", "Polygon"]
     );
 
     const coreCoverage = [
@@ -91,6 +98,30 @@ test("field-level enrichment maximizes coverage for the requested asset set", as
     });
     assert.ok(finnhubQuoteIndex >= 0);
     assert.ok(yahooFundamentalsIndex > finnhubQuoteIndex);
+    const fmpProfileIndex = requestedUrls.findIndex((value) => {
+      return value.includes("financialmodelingprep.com/stable/profile") && value.includes(`symbol=${asset.symbol}`);
+    });
+    const alphaIndex = requestedUrls.findIndex((value) => {
+      return value.includes("alphavantage.co") && value.includes(`symbol=${asset.symbol}`);
+    });
+    assert.ok(fmpProfileIndex > yahooFundamentalsIndex);
+    assert.ok(alphaIndex > fmpProfileIndex);
+  }
+
+  for (const symbol of ["SPY", "QQQ"]) {
+    const asset = response.body.assets.find((candidate) => candidate.symbol === symbol);
+    assert.equal(asset.sources.beta, "FMP");
+    assert.equal(asset.sources.returnOnEquity, "FMP");
+    assert.equal(asset.sources.priceToBook, "FMP");
+    assert.equal(asset.sources.targetMeanPrice, "FMP");
+    assert.equal(asset.sources.earningsSurprise, "FMP");
+    assert.equal(asset.sources.analystRating, "FMP");
+    assert.equal(asset.analystRating, "Buy");
+    assert.equal(asset.sources.expenseRatio, "FMP");
+    assert.equal(asset.sources.etfHoldings, "FMP");
+    assert.equal(asset.expenseRatio, 0.09);
+    assert.equal(asset.etfHoldings.length, 2);
+    assert.equal(asset.etfHoldings[1].weight, 0.12);
   }
 
   assert.equal(requestedUrls.some((url) => url.includes("/v7/finance/quote")), false);
@@ -103,6 +134,10 @@ test("provider status exposes configured primary provider and cache activity", a
   assert.equal(response.body.provider, "Finnhub primary + field-level enrichment");
   assert.equal(response.body.finnhubConfigured, true);
   assert.equal(response.body.finnhubWorking, true);
+  assert.equal(response.body.fmpConfigured, true);
+  assert.equal(response.body.fmpWorking, true);
+  assert.equal(response.body.checks.fmp.configured, true);
+  assert.equal(response.body.checks.fmp.working, true);
   assert.ok(response.body.cacheStats.hits > 0);
   assert.equal(requestedUrls.length, callsBefore);
 });
@@ -147,13 +182,15 @@ function mockFinnhub(url) {
   } else if (url.pathname.endsWith("/company-news")) {
     body = [];
   } else if (url.pathname.endsWith("/stock/earnings")) {
-    body = [{ period: "2025-Q4", surprisePercent: 4.5 }];
+    body = symbol === "SPY" || symbol === "QQQ" ? [] : [{ period: "2025-Q4", surprisePercent: 4.5 }];
   } else if (url.pathname.endsWith("/calendar/earnings")) {
     body = { earningsCalendar: [{ date: "2026-07-20" }] };
   } else if (url.pathname.endsWith("/stock/recommendation")) {
-    body = [{ period: "2026-06-01", strongBuy: 8, buy: 12, hold: 5, sell: 1, strongSell: 0 }];
+    body = symbol === "SPY" || symbol === "QQQ"
+      ? []
+      : [{ period: "2026-06-01", strongBuy: 8, buy: 12, hold: 5, sell: 1, strongSell: 0 }];
   } else if (url.pathname.endsWith("/stock/price-target")) {
-    body = { targetMean: 240 + offset };
+    body = symbol === "SPY" || symbol === "QQQ" ? {} : { targetMean: 240 + offset };
   } else if (url.pathname.endsWith("/stock/ownership")) {
     body = { ownership: [] };
   } else if (url.pathname.endsWith("/stock/short-interest")) {
@@ -168,6 +205,7 @@ function mockYahoo(url) {
   if (url.pathname.endsWith("/v1/test/getcrumb")) return new Response("test-crumb", { status: 200 });
   const symbol = decodeURIComponent(url.pathname.split("/").at(-1));
   if (url.pathname.includes("/v10/finance/quoteSummary/")) {
+    const isEtf = symbol === "SPY" || symbol === "QQQ";
     return jsonResponse({
       quoteSummary: {
         result: [{
@@ -179,24 +217,20 @@ function mockYahoo(url) {
             profitMargins: { raw: 0.24 },
             operatingMargins: { raw: 0.28 },
             debtToEquity: { raw: 42 },
-            returnOnEquity: { raw: 0.31 },
+            ...(!isEtf ? { returnOnEquity: { raw: 0.31 } } : {}),
             quickRatio: { raw: 1.2 },
             totalCashPerShare: { raw: 4.5 },
-            targetMeanPrice: { raw: 250 },
-            recommendationKey: "buy"
+            ...(!isEtf ? { targetMeanPrice: { raw: 250 }, recommendationKey: "buy" } : {})
           },
           defaultKeyStatistics: {
             forwardPE: { raw: 22 },
-            priceToBook: { raw: 7 },
-            beta: { raw: 1.1 },
+            ...(!isEtf ? { priceToBook: { raw: 7 }, beta: { raw: 1.1 } } : {}),
             heldPercentInstitutions: { raw: 0.68 }
           },
           recommendationTrend: {
             trend: [{ period: "0m", strongBuy: 8, buy: 12, hold: 5, sell: 1, strongSell: 0 }]
           },
-          earningsHistory: {
-            history: [{ surprisePercent: { raw: 0.045 } }]
-          },
+          earningsHistory: { history: isEtf ? [] : [{ surprisePercent: { raw: 0.045 } }] },
           majorHoldersBreakdown: { institutionsPercentHeld: { raw: 0.68 } },
           price: { symbol }
         }],
@@ -229,14 +263,21 @@ function mockAlphaVantage(url) {
 }
 
 function mockFmp(url) {
-  const endpoint = url.pathname.split("/").at(-1);
+  const endpoint = url.pathname.replace("/stable/", "");
   const bodies = {
-    profile: [{ companyName: "Test Asset", exchangeShortName: "NASDAQ", sector: "Technology", industry: "Software", currency: "USD", beta: 1.1, price: 200 }],
-    "ratios-ttm": [{ payoutRatioTTM: 0.24 }],
+    profile: [{ symbol: url.searchParams.get("symbol"), companyName: "Test Asset", exchangeShortName: "NASDAQ", sector: "Technology", industry: "Software", currency: "USD", beta: 1.25, price: 200 }],
+    "ratios-ttm": [{ payoutRatioTTM: 0.24, priceToBookRatioTTM: 6.5, returnOnEquityRatioTTM: 0.27, returnOnAssetsRatioTTM: 0.14, debtToEquityRatioTTM: 0.4 }],
     "key-metrics-ttm": [{ enterpriseValueOverEBITDATTM: 18, evToSalesTTM: 6, cashPerShareTTM: 4.5 }],
     "financial-growth": [{ freeCashFlowGrowth: 0.18 }],
     "analyst-estimates": [{ estimatedPriceTargetAvg: 255, estimatedEpsAvg: 9 }],
-    "grades-consensus": [{ strongBuy: 8, buy: 12, hold: 5, sell: 1, strongSell: 0, consensus: "Buy" }]
+    "grades-consensus": [{ strongBuy: 8, buy: 12, hold: 5, sell: 1, strongSell: 0, consensus: "Buy" }],
+    "price-target-consensus": [{ targetConsensus: 258, targetMedian: 255 }],
+    earnings: [{ epsActual: 2.1, epsEstimated: 2 }],
+    "etf/info": [{ expenseRatio: 0.09 }],
+    "etf/holdings": [
+      { asset: "AAPL", name: "Apple Inc.", weightPercentage: 7.1, sharesNumber: 1000, marketValue: 200000 },
+      { asset: "MSFT", name: "Microsoft Corporation", weightPercentage: 0.12, sharesNumber: 900, marketValue: 180000 }
+    ]
   };
   if (!(endpoint in bodies)) throw new Error(`Unhandled FMP endpoint: ${endpoint}`);
   return jsonResponse(bodies[endpoint]);
