@@ -61,6 +61,8 @@ test("field-level enrichment maximizes coverage for the requested asset set", as
     assert.ok(asset.cashPerShare > 0);
     assert.ok(asset.week52High > asset.week52Low);
     assert.ok(asset.volume > 0);
+    assert.equal(dataQualityScore({ ...asset, volume: null }), 90, `${asset.symbol} should be 90/100 without volume`);
+    assert.equal(dataQualityScore(asset), 100, `${asset.symbol} should have 100/100 Data Quality`);
     assert.equal(asset.sources.price, "Finnhub");
     assert.equal(asset.sources.peRatio, "Finnhub");
     assert.equal(asset.sources.beta, asset.assetType === "ETF" ? "FMP" : "Yahoo fundamentals");
@@ -75,6 +77,7 @@ test("field-level enrichment maximizes coverage for the requested asset set", as
     assert.equal(asset.sources.freeCashFlowGrowth, "FMP");
     assert.equal(asset.sources.grossMargin, "Polygon");
     assert.equal(asset.sources.currentRatio, "Polygon");
+    assert.equal(asset.sources.volume, asset.symbol === "AMZN" ? "Alpha Vantage Global Quote" : "FMP quote");
 
     const diagnostic = asset.metricDiagnostics.shortInterest;
     assert.ok(diagnostic);
@@ -138,6 +141,9 @@ test("provider status exposes configured primary provider and cache activity", a
   assert.equal(response.body.fmpWorking, true);
   assert.equal(response.body.checks.fmp.configured, true);
   assert.equal(response.body.checks.fmp.working, true);
+  assert.equal(response.body.volumeSources.active, "FMP quote");
+  assert.equal(response.body.volumeSources.fmpQuote.working, true);
+  assert.equal(response.body.volumeSources.alphaVantageGlobalQuote.working, true);
   assert.ok(response.body.cacheStats.hits > 0);
   assert.equal(requestedUrls.length, callsBefore);
 });
@@ -177,7 +183,7 @@ function mockFinnhub(url) {
       s: "ok",
       t: Array.from({ length: 20 }, (_, index) => timestamp - (19 - index) * 86_400),
       c: Array.from({ length: 20 }, (_, index) => 181 + offset + index),
-      v: Array.from({ length: 20 }, () => 50_000_000)
+      v: []
     };
   } else if (url.pathname.endsWith("/company-news")) {
     body = [];
@@ -243,6 +249,15 @@ function mockYahoo(url) {
 
 function mockAlphaVantage(url) {
   const fn = url.searchParams.get("function");
+  if (fn === "GLOBAL_QUOTE") {
+    return jsonResponse({
+      "Global Quote": {
+        "01. symbol": url.searchParams.get("symbol"),
+        "05. price": "200",
+        "06. volume": "65000000"
+      }
+    });
+  }
   if (fn === "OVERVIEW") {
     return jsonResponse({
       Symbol: url.searchParams.get("symbol"),
@@ -264,8 +279,11 @@ function mockAlphaVantage(url) {
 
 function mockFmp(url) {
   const endpoint = url.pathname.replace("/stable/", "");
+  const symbol = url.searchParams.get("symbol");
   const bodies = {
-    profile: [{ symbol: url.searchParams.get("symbol"), companyName: "Test Asset", exchangeShortName: "NASDAQ", sector: "Technology", industry: "Software", currency: "USD", beta: 1.25, price: 200 }],
+    profile: [{ symbol, companyName: "Test Asset", exchangeShortName: "NASDAQ", sector: "Technology", industry: "Software", currency: "USD", beta: 1.25, price: 200 }],
+    quote: symbol === "AMZN" ? [{ symbol, price: 200 }] : [{ symbol, price: 200, volume: 75_000_000, avgVolume: 68_000_000 }],
+    "quote-short": symbol === "AMZN" ? [{ symbol, price: 200 }] : [{ symbol, price: 200, volume: 75_000_000 }],
     "ratios-ttm": [{ payoutRatioTTM: 0.24, priceToBookRatioTTM: 6.5, returnOnEquityRatioTTM: 0.27, returnOnAssetsRatioTTM: 0.14, debtToEquityRatioTTM: 0.4 }],
     "key-metrics-ttm": [{ enterpriseValueOverEBITDATTM: 18, evToSalesTTM: 6, cashPerShareTTM: 4.5 }],
     "financial-growth": [{ freeCashFlowGrowth: 0.18 }],
@@ -340,6 +358,14 @@ function jsonResponse(body) {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+function dataQualityScore(asset) {
+  const fields = ["price", "peRatio", "beta", "marketCap", "eps", "revenueGrowth", "profitMargin", "debtToEquity", "volume"];
+  const isMetric = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+  const available = fields.filter((field) => isMetric(asset[field])).length
+    + (isMetric(asset.week52High) && isMetric(asset.week52Low) ? 1 : 0);
+  return available * 10;
 }
 
 function request(pathname) {

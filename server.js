@@ -36,6 +36,12 @@ const PROVIDER_HEALTH = {
   fmp: providerHealthState(Boolean(FMP_API_KEY)),
   polygon: providerHealthState(Boolean(POLYGON_API_KEY))
 };
+const VOLUME_SOURCE_HEALTH = {
+  finnhubHistory: volumeSourceState(Boolean(FINNHUB_API_KEY), "Finnhub price history"),
+  yahooChart: volumeSourceState(true, "Yahoo chart"),
+  fmpQuote: volumeSourceState(Boolean(FMP_API_KEY), "FMP quote"),
+  alphaVantageGlobalQuote: volumeSourceState(Boolean(ALPHA_VANTAGE_API_KEY), "Alpha Vantage Global Quote")
+};
 const FUNDAMENTAL_FIELDS = [
   "marketCap", "peRatio", "forwardPe", "pegRatio", "priceToBook", "evToEbitda", "evToSales",
   "eps", "dividendYield", "payoutRatio", "week52High", "week52Low", "volume", "averageVolume",
@@ -211,14 +217,14 @@ class HybridMarketProvider extends MarketProvider {
         throw error;
       }
     } else {
-      const yahooAttempt = await runEnricher("Yahoo", true, () => this.quoteProvider.getFundamentals(normalized, asset));
+      const yahooAttempt = await runEnricher("Yahoo", true, () => this.quoteProvider.getEnrichmentOverlay(normalized, asset));
       attempts.push(yahooAttempt);
       asset = mergeMissingAssetFields(asset, yahooAttempt.overlay);
     }
 
     const optionalEnrichers = [
-      ["FMP", Boolean(this.fmpProvider), () => this.fmpProvider.getFundamentalOverlay(normalized, asset)],
-      ["Alpha Vantage", Boolean(this.alphaVantageProvider), () => this.alphaVantageProvider.getFundamentalOverlay(normalized)],
+      ["FMP", Boolean(this.fmpProvider), () => this.fmpProvider.getEnrichmentOverlay(normalized, asset)],
+      ["Alpha Vantage", Boolean(this.alphaVantageProvider), () => this.alphaVantageProvider.getEnrichmentOverlay(normalized, asset)],
       ["Polygon", Boolean(this.polygonProvider), () => this.polygonProvider.getFundamentalOverlay(normalized, asset)]
     ];
     for (const [name, configured, loader] of optionalEnrichers) {
@@ -458,6 +464,32 @@ class YahooFinanceProvider extends MarketProvider {
 
   async getFundamentals(symbol, quote = {}) {
     return cached(`yahoo-fundamentals:${symbol}`, FUNDAMENTAL_TTL_MS, () => this.fetchFundamentals(symbol, quote));
+  }
+
+  async getEnrichmentOverlay(symbol, quote = {}) {
+    const fundamentalsResult = await Promise.allSettled([this.getFundamentals(symbol, quote)]);
+    let overlay = fundamentalsResult[0].status === "fulfilled" ? fundamentalsResult[0].value : {};
+    if (!hasMetricValue(overlay.volume) || !hasMetricValue(overlay.averageVolume)) {
+      try {
+        const chartQuote = await this.getChartQuote(symbol);
+        const values = {
+          volume: numberOrNull(chartQuote.volume),
+          averageVolume: numberOrNull(chartQuote.averageVolume)
+        };
+        recordVolumeSourceResult("yahooChart", values.volume, values.averageVolume);
+        overlay = mergeMissingAssetFields(overlay, {
+          ...values,
+          sources: sourceMapForAvailable("Yahoo chart", values)
+        });
+      } catch (error) {
+        recordVolumeSourceFailure("yahooChart", error);
+        console.warn(`[Aurex] Yahoo chart volume ${symbol} unavailable: ${providerFailureDescription(error)}`);
+      }
+    }
+    if (!Object.keys(overlay).length && fundamentalsResult[0].status === "rejected") {
+      throw fundamentalsResult[0].reason;
+    }
+    return overlay;
   }
 
   async fetchFundamentals(symbol, quote = {}) {
@@ -1116,6 +1148,7 @@ class FinnhubProvider extends MarketProvider {
     mappings.volume = candidateEntry([
       ["stock/candle.v[last]", historyResult.volume]
     ]);
+    recordVolumeSourceResult("finnhubHistory", mappings.volume.value, mappings.averageVolume.value);
     logMetricMappings("Finnhub quote/profile2/metric", normalized, mappings, {
       quoteFields: Object.keys(quote),
       profileFields: Object.keys(profile),
@@ -1327,6 +1360,46 @@ class AlphaVantageProvider extends MarketProvider {
     });
   }
 
+  async getVolumeOverlay(symbol) {
+    return cached(`alphavantage-volume:${symbol}`, QUOTE_TTL_MS, async () => {
+      try {
+        const response = await this.request({ function: "GLOBAL_QUOTE", symbol });
+        const quote = response?.["Global Quote"] || {};
+        const values = {
+          volume: numberOrNull(quote["06. volume"]),
+          averageVolume: null
+        };
+        if (!hasMetricValue(values.volume)) {
+          throw providerError("Alpha Vantage", `GLOBAL_QUOTE ${symbol}`, "invalid_response", null, `Alpha Vantage returned no volume for ${symbol}.`);
+        }
+        recordVolumeSourceResult("alphaVantageGlobalQuote", values.volume, values.averageVolume);
+        return {
+          ...values,
+          sources: sourceMapForAvailable("Alpha Vantage Global Quote", values)
+        };
+      } catch (error) {
+        recordVolumeSourceFailure("alphaVantageGlobalQuote", error);
+        throw error;
+      }
+    });
+  }
+
+  async getEnrichmentOverlay(symbol, asset = {}) {
+    const volumeRequest = hasMetricValue(asset.volume)
+      ? Promise.resolve({})
+      : this.getVolumeOverlay(symbol);
+    const [fundamentalsResult, volumeResult] = await Promise.allSettled([
+      this.getFundamentalOverlay(symbol),
+      volumeRequest
+    ]);
+    if (fundamentalsResult.status === "rejected" && volumeResult.status === "rejected") {
+      throw fundamentalsResult.reason;
+    }
+    const fundamentals = fundamentalsResult.status === "fulfilled" ? fundamentalsResult.value : {};
+    const volume = volumeResult.status === "fulfilled" ? volumeResult.value : {};
+    return mergeMissingAssetFields(fundamentals, volume);
+  }
+
   async getAsset(symbol) {
     const normalized = normalizeSymbol(symbol);
     const [quoteResponse, overview, historyResponse, newsResponse] = await Promise.all([
@@ -1437,6 +1510,56 @@ class FinancialModelingPrepProvider extends MarketProvider {
       }
       return true;
     });
+  }
+
+  async getVolumeOverlay(symbol) {
+    return cached(`fmp-volume:${symbol}`, QUOTE_TTL_MS, async () => {
+      let quote;
+      let firstError;
+      try {
+        quote = firstObject(await this.request("quote", { symbol }));
+      } catch (error) {
+        firstError = error;
+      }
+      if (!hasMetricValue(quote?.volume)) {
+        try {
+          quote = firstObject(await this.request("quote-short", { symbol }));
+        } catch (error) {
+          recordVolumeSourceFailure("fmpQuote", firstError || error);
+          throw firstError || error;
+        }
+      }
+      const values = {
+        volume: numberOrNull(quote?.volume),
+        averageVolume: numberOrNull(quote?.avgVolume ?? quote?.averageVolume)
+      };
+      if (!hasMetricValue(values.volume)) {
+        const error = providerError("FMP", `quote ${symbol}`, "invalid_response", null, `FMP returned no volume for ${symbol}.`);
+        recordVolumeSourceFailure("fmpQuote", error);
+        throw error;
+      }
+      recordVolumeSourceResult("fmpQuote", values.volume, values.averageVolume);
+      return {
+        ...values,
+        sources: sourceMapForAvailable("FMP quote", values)
+      };
+    });
+  }
+
+  async getEnrichmentOverlay(symbol, asset = {}) {
+    const volumeRequest = hasMetricValue(asset.volume) && hasMetricValue(asset.averageVolume)
+      ? Promise.resolve({})
+      : this.getVolumeOverlay(symbol);
+    const [fundamentalsResult, volumeResult] = await Promise.allSettled([
+      this.getFundamentalOverlay(symbol, asset),
+      volumeRequest
+    ]);
+    if (fundamentalsResult.status === "rejected" && volumeResult.status === "rejected") {
+      throw fundamentalsResult.reason;
+    }
+    const fundamentals = fundamentalsResult.status === "fulfilled" ? fundamentalsResult.value : {};
+    const volume = volumeResult.status === "fulfilled" ? volumeResult.value : {};
+    return mergeMissingAssetFields(fundamentals, volume);
   }
 
   async getFundamentalOverlay(symbol, asset = {}) {
@@ -1827,6 +1950,12 @@ async function probeConfiguredProvider() {
     if (provider.fmpProvider && PROVIDER_HEALTH.fmp.working === null) {
       probes.push(provider.fmpProvider.probe());
     }
+    if (provider.fmpProvider && VOLUME_SOURCE_HEALTH.fmpQuote.working === null) {
+      probes.push(provider.fmpProvider.getVolumeOverlay("AAPL"));
+    }
+    if (provider.alphaVantageProvider && VOLUME_SOURCE_HEALTH.alphaVantageGlobalQuote.working === null) {
+      probes.push(provider.alphaVantageProvider.getVolumeOverlay("AAPL"));
+    }
     await Promise.allSettled(probes);
     return;
   }
@@ -1853,6 +1982,14 @@ function providerStatusSnapshot() {
       finnhub: publicProviderHealth(PROVIDER_HEALTH.finnhub),
       fmp: publicProviderHealth(PROVIDER_HEALTH.fmp),
       yahoo: publicProviderHealth(PROVIDER_HEALTH.yahoo)
+    },
+    volumeSources: {
+      priority: ["Finnhub price history", "Yahoo chart", "FMP quote", "Alpha Vantage Global Quote"],
+      active: firstWorkingVolumeSource(),
+      finnhubHistory: publicVolumeSourceHealth(VOLUME_SOURCE_HEALTH.finnhubHistory),
+      yahooChart: publicVolumeSourceHealth(VOLUME_SOURCE_HEALTH.yahooChart),
+      fmpQuote: publicVolumeSourceHealth(VOLUME_SOURCE_HEALTH.fmpQuote),
+      alphaVantageGlobalQuote: publicVolumeSourceHealth(VOLUME_SOURCE_HEALTH.alphaVantageGlobalQuote)
     },
     timestamp: new Date().toISOString()
   };
@@ -2636,6 +2773,53 @@ function providerHealthState(configured) {
     lastStatus: null,
     operations: {}
   };
+}
+
+function volumeSourceState(configured, source) {
+  return {
+    configured,
+    source,
+    working: null,
+    lastCheckedAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    lastError: null,
+    suppliesAverageVolume: null
+  };
+}
+
+function recordVolumeSourceResult(key, volume, averageVolume) {
+  const state = VOLUME_SOURCE_HEALTH[key];
+  if (!state) return;
+  const timestamp = new Date().toISOString();
+  state.lastCheckedAt = timestamp;
+  state.working = hasMetricValue(volume);
+  state.suppliesAverageVolume = hasMetricValue(averageVolume);
+  if (state.working) {
+    state.lastSuccessAt = timestamp;
+    state.lastError = null;
+  } else {
+    state.lastFailureAt = timestamp;
+    state.lastError = "Provider returned no volume.";
+  }
+}
+
+function recordVolumeSourceFailure(key, error) {
+  const state = VOLUME_SOURCE_HEALTH[key];
+  if (!state) return;
+  const timestamp = new Date().toISOString();
+  state.lastCheckedAt = timestamp;
+  state.working = false;
+  state.lastFailureAt = timestamp;
+  state.lastError = userSafeError(error);
+}
+
+function publicVolumeSourceHealth(state) {
+  return { ...state };
+}
+
+function firstWorkingVolumeSource() {
+  return Object.values(VOLUME_SOURCE_HEALTH).find((state) => state.working)?.source || null;
 }
 
 function publicProviderHealth(state) {
