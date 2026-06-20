@@ -18,24 +18,23 @@
           </span>
         </a>
         <div class="landing-nav-actions">
-          <button class="theme-toggle compact" id="themeToggle" type="button">Theme</button>
           <a class="button secondary" href="/app">Open App</a>
         </div>
       </nav>
 
       <section class="hero-section">
         <div class="hero-copy">
-          <p class="eyebrow">Premium market intelligence</p>
-          <h1>A clearer way to research investments and understand portfolio fit.</h1>
-          <p class="hero-subtitle">Aurex combines provider-backed market data, transparent sources, weighted fundamentals, news sentiment, data-quality scoring, and portfolio-aware recommendations in one clean workspace.</p>
+          <p class="eyebrow">Market Intelligence</p>
+          <h1>Aurex Market Intelligence.</h1>
+          <p class="hero-subtitle">Analyze companies, compare valuations, and evaluate portfolio exposure with provider-backed market data and disciplined fundamental research.</p>
           <div class="hero-actions">
             <a class="button primary" href="/app">Launch Platform</a>
             <a class="button ghost" href="#preview">View Live Preview</a>
           </div>
           <div class="hero-proof">
             <span>Live or delayed provider data</span>
-            <span>Confidence-aware verdicts</span>
-            <span>No fake numbers</span>
+            <span>Portfolio-aware research</span>
+            <span>Unavailable data stays unavailable</span>
           </div>
         </div>
         <aside class="hero-terminal" aria-label="Aurex platform summary">
@@ -44,11 +43,11 @@
           </div>
           <div class="terminal-grid">
             <div>
-              <small>Weighted Score</small>
-              <strong id="landingScore">--/100</strong>
+              <small>Valuation</small>
+              <strong id="landingScore">Pending</strong>
             </div>
             <div>
-              <small>Verdict</small>
+              <small>Investment View</small>
               <strong id="landingVerdict">Loading</strong>
             </div>
             <div>
@@ -56,8 +55,8 @@
               <strong id="landingConfidence">--</strong>
             </div>
             <div>
-              <small>Data Quality</small>
-              <strong id="landingQuality">--/100</strong>
+              <small>Coverage</small>
+              <strong id="landingQuality">Pending</strong>
             </div>
             <div>
               <small>Provider</small>
@@ -88,8 +87,8 @@
       <section class="preview-section" id="preview">
         <div>
           <p class="eyebrow">Live preview</p>
-          <h2>One asset, explained simply.</h2>
-          <p class="section-copy">This example card uses the same API and scoring engine as the main platform. If a provider does not return a field, Aurex says so.</p>
+          <h2>One company, placed in context.</h2>
+          <p class="section-copy">The live preview uses the same market data and research model as the platform, with missing fields disclosed rather than estimated as facts.</p>
         </div>
         <article class="preview-card loading" id="landingPreview">
           <div class="preview-card-header">
@@ -97,7 +96,7 @@
               <span id="previewSymbol">AAPL</span>
               <h3 id="previewName">Loading Apple...</h3>
             </div>
-            <strong class="verdict-badge hold" id="previewVerdict">Hold</strong>
+            <strong class="verdict-badge" id="previewVerdict">Hold</strong>
           </div>
           <div class="preview-price">
             <strong id="previewPrice">Unavailable</strong>
@@ -114,10 +113,10 @@
           <h2>Built for explanation, not just data dumps.</h2>
         </div>
         <div class="advantage-grid">
-          <p><strong>Clearer analysis:</strong> each verdict cites the strongest factor, weakest factor, data quality, and what could change the rating.</p>
+          <p><strong>Clearer analysis:</strong> each investment view identifies the central thesis, key supports, material risks, and valuation context.</p>
           <p><strong>Portfolio personalization:</strong> recommendations adapt to cash, risk tolerance, horizon, and concentration.</p>
-          <p><strong>Stronger scoring logic:</strong> financial strength, valuation, growth, profitability, risk, and news are weighted separately.</p>
-          <p><strong>Simpler reasoning:</strong> missing fields lower confidence instead of being filled with pretend values.</p>
+          <p><strong>Disciplined research:</strong> financial strength, valuation, growth, profitability, risk, and news remain independently assessed.</p>
+          <p><strong>Transparent limitations:</strong> incomplete provider fields reduce confidence instead of being filled with synthetic values.</p>
         </div>
       </section>
 

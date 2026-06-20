@@ -40,8 +40,6 @@
           <div id="recentPanel" class="side-list"></div>
         </section>
 
-        <button class="theme-toggle" id="themeToggle" type="button">Toggle theme</button>
-
         <div class="disclaimer">
           <strong>Educational disclaimer</strong>
           <p>This platform is for educational and informational purposes only. It does not guarantee investment results and should not be treated as professional financial advice. Users should do their own research before making real investment decisions.</p>
@@ -51,8 +49,8 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Live research workspace</p>
-            <h1>Research assets, compare fundamentals, and test portfolio fit.</h1>
+            <p class="eyebrow">Market Intelligence</p>
+            <h1>Analyze companies, compare valuations, and evaluate portfolio exposure.</h1>
           </div>
           <div class="status-stack">
             <div class="data-status" id="providerStatus">
@@ -85,9 +83,9 @@
                   <div class="asset-tags" id="assetTags"></div>
                 </div>
                 <div class="verdict-stack">
-                  <div class="verdict-badge hold" id="companyVerdict">Hold</div>
+                  <div class="verdict-badge" id="companyVerdict">View pending</div>
                   <span id="confidenceBadge" class="confidence-badge">Confidence pending</span>
-                  <span id="dataQualityBadge" class="confidence-badge">Data quality pending</span>
+                  <span id="dataQualityBadge" class="confidence-badge">Coverage pending</span>
                 </div>
               </div>
               <div class="price-line">
@@ -97,7 +95,7 @@
               <div class="trust-strip" id="trustStrip">
                 <div><span>Provider</span><strong>Connecting</strong></div>
                 <div><span>Updated</span><strong>Pending</strong></div>
-                <div><span>Data Quality</span><strong>--/100</strong></div>
+                <div><span>Coverage</span><strong>Pending</strong></div>
                 <div><span>Confidence</span><strong>Pending</strong></div>
                 <div><span>Main source</span><strong>Pending</strong></div>
               </div>
@@ -105,7 +103,11 @@
                 <button id="watchlistToggle" type="button">Add to watchlist</button>
                 <button type="button" data-tab-jump="comparison">Compare this asset</button>
               </div>
-              <div class="asset-source" id="assetSource">Provider details pending.</div>
+              <details class="data-details">
+                <summary>Data details</summary>
+                <p class="asset-source" id="assetSource">Provider details pending.</p>
+                <div id="dataDetailsPanel" class="data-details-panel"></div>
+              </details>
             </article>
 
             <article class="panel">
@@ -167,27 +169,27 @@
                 <h2>Financial Metrics</h2>
                 <span id="missingDataLabel">Checking fields</span>
               </div>
-              <div class="metric-grid financial-grid" id="financialMetricsGrid"></div>
+              <div class="financial-groups" id="financialMetricsGrid"></div>
             </article>
           </div>
 
           <div class="analysis-grid">
             <article class="panel">
               <div class="panel-title">
-                <h2>Investment Verdict</h2>
-                <span id="standaloneScore">Score --/100</span>
+                <h2>Investment View</h2>
+                <span id="standaloneScore">View pending</span>
               </div>
               <p id="verdictExplanation" class="explanation"></p>
               <div class="confidence-note" id="confidenceNote"></div>
               <div class="data-quality" id="dataQualityPanel"></div>
-              <div class="score-bars score-card-grid" id="scoreBars"></div>
+              <div class="factor-grid" id="scoreBars"></div>
               <div class="analyst-grid" id="analystReportGrid"></div>
             </article>
 
             <article class="panel">
               <div class="panel-title">
-                <h2>SWOT and Research Summary</h2>
-                <span>Strengths, weaknesses, risks, catalysts</span>
+                <h2>Research Summary</h2>
+                <span>Supports, offsets, risks, catalysts</span>
               </div>
               <div class="research-grid" id="researchGrid"></div>
             </article>
@@ -233,14 +235,14 @@
             <article class="panel">
               <div class="panel-title">
                 <h2>Recent News</h2>
-                <span id="newsScoreLabel">Sentiment pending</span>
+                <span id="newsScoreLabel">News tone pending</span>
               </div>
               <div class="news-list" id="newsList"></div>
             </article>
 
             <article class="panel">
               <div class="panel-title">
-                <h2>Portfolio-Aware Recommendation</h2>
+                <h2>Portfolio Fit</h2>
                 <span id="portfolioAwareVerdict">No portfolio yet</span>
               </div>
               <p id="portfolioAwareExplanation" class="explanation"></p>
@@ -267,7 +269,7 @@
             <div class="compare-controls" id="compareControls"></div>
             <div class="comparison-summary" id="comparisonSummary"></div>
             <div class="winner-grid" id="comparisonWinners"></div>
-            <canvas id="comparisonChart" width="1040" height="280" aria-label="Company comparison metrics chart"></canvas>
+            <canvas id="comparisonChart" width="1040" height="280" aria-label="Company comparison research view"></canvas>
             <div class="table-wrap">
               <table class="comparison-table" id="comparisonTable"></table>
             </div>

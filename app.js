@@ -412,15 +412,15 @@ function buildResearch(asset, score) {
   const risks = [];
   const catalysts = [];
 
-  if (score.categories.balanceSheet >= 65) strengths.push("Balance sheet, liquidity, and scale indicators are supportive.");
+  if (score.categories.balanceSheet >= 65) strengths.push("Balance-sheet, liquidity, and scale indicators are supportive.");
   if (score.categories.profitability >= 65) strengths.push(`Profitability screens well${asset.profitMargin !== null ? ` at ${number(asset.profitMargin, 1)}% margin` : ""}.`);
-  if (score.categories.growth >= 65) strengths.push("Growth indicators are above the model's neutral baseline.");
+  if (score.categories.growth >= 65) strengths.push("Growth indicators are stronger than the neutral research baseline.");
   if (score.categories.newsSentiment >= 65) strengths.push("Recent news tone is broadly constructive.");
-  if (!strengths.length) strengths.push("The model sees neutral factors, but no dominant strength from the returned dataset.");
+  if (!strengths.length) strengths.push("Available evidence is balanced, with no single factor providing decisive support.");
 
   if (score.categories.valuation < 50) weaknesses.push("Valuation looks demanding relative to available benchmarks.");
   if (score.categories.growth < 50) weaknesses.push("Growth signals are weak or missing, reducing conviction.");
-  if (score.confidence.missing.length) weaknesses.push(`Missing data: ${score.confidence.missing.slice(0, 8).join(", ")}.`);
+  if (score.confidence.missing.length) weaknesses.push(`Unavailable fields include ${score.confidence.missing.slice(0, 8).map(metricDisplayName).join(", ")}.`);
   if (!asset.live) weaknesses.push("Live or delayed market data was unavailable, so the verdict should be treated cautiously.");
   if (!weaknesses.length) weaknesses.push("No severe weakness stands out in the currently available provider data.");
 
@@ -433,7 +433,7 @@ function buildResearch(asset, score) {
   if (asset.payoutRatio !== null && asset.payoutRatio > 85) risks.push(`A payout ratio of ${number(asset.payoutRatio, 1)}% may limit dividend flexibility.`);
   if (asset.changePercent !== null && asset.changePercent < -3) risks.push("Large daily decline may indicate fresh market concern.");
   if (asset.assetType === "CRYPTOCURRENCY") risks.push("Crypto assets can have large drawdowns and weaker fundamental comparability.");
-  if (score.categories.newsSentiment < 45) risks.push("Recent news sentiment is a drag on the model.");
+  if (score.categories.newsSentiment < 45) risks.push("Recent news flow weakens the near-term view.");
   if (!risks.length) risks.push("Main risks are valuation changes, earnings revisions, liquidity, and sector-specific macro pressure.");
 
   if (asset.targetMeanPrice && asset.price && asset.targetMeanPrice > asset.price) catalysts.push("Analyst target price sits above the current quote.");
@@ -448,22 +448,19 @@ function buildResearch(asset, score) {
 }
 
 function verdictExplanation(asset, score) {
-  const strongest = score.factors.strongest;
-  const weakest = score.factors.weakest;
-  const confidenceText = `${score.confidence.level.toLowerCase()} confidence`;
-  const dataNote = asset.live
-    ? `Provider data is ${asset.marketState || "available"} as of ${displayDate(asset.lastUpdated)}.`
-    : "Live data was unavailable, so Aurex is not filling missing values with fake numbers.";
-  const normal = `${asset.symbol} is rated ${score.verdict} with a score of ${score.overall}/100 and ${confidenceText}. The main support is ${strongest[0].toLowerCase()} at ${Math.round(strongest[1])}/100. The biggest drag is ${weakest[0].toLowerCase()} at ${Math.round(weakest[1])}/100. ${dataNote}`;
-  const beginner = `${asset.symbol} is a ${score.verdict}. Aurex likes ${strongest[0].toLowerCase()} most, but ${weakest[0].toLowerCase()} is holding the score back. ${dataNote}`;
+  const strongest = score.factors.strongest[0].toLowerCase();
+  const weakest = score.factors.weakest[0].toLowerCase();
+  const valuation = qualitativeFactor("valuation", score.categories.valuation).toLowerCase();
+  const normal = `${asset.name} carries a ${score.verdict.toLowerCase()} investment view. ${sentenceCase(strongest)} is the principal support, while ${weakest} remains the main offset. Valuation appears ${valuation} relative to the available operating and sector evidence, and the conclusion carries ${score.confidence.level.toLowerCase()} confidence.`;
+  const beginner = `${asset.symbol} has a ${score.verdict.toLowerCase()} view. Its strongest area is ${strongest}; ${weakest} is the main concern. The valuation looks ${valuation}, and confidence is ${score.confidence.level.toLowerCase()}.`;
   return explain(normal, beginner);
 }
 
 function confidenceCopy(score) {
-  const missing = score.confidence.missing.slice(0, 6).join(", ");
-  if (score.confidence.level === "High") return `High investment confidence: data quality is ${score.dataQuality.score}/100, recent price history and news are available, and most fundamentals were returned.`;
-  if (score.confidence.level === "Medium") return `Medium investment confidence: enough data is available for directional analysis, but ${missing || "some important fields"} are unavailable.`;
-  return `Low investment confidence: several key metrics are unavailable (${missing || "provider fields"}), so the verdict should be treated as preliminary.`;
+  const missing = score.confidence.missing.slice(0, 6).map(metricDisplayName).join(", ");
+  if (score.confidence.level === "High") return "High confidence: the research view is supported by broad fundamental, market, and recent-price coverage.";
+  if (score.confidence.level === "Medium") return `Medium confidence: the available evidence supports a directional view, although ${missing || "several supporting fields"} remain unavailable.`;
+  return `Low confidence: important inputs are unavailable (${missing || "provider fields"}), so the investment view should be treated as preliminary.`;
 }
 
 function explain(normal, beginner) {
@@ -471,19 +468,25 @@ function explain(normal, beginner) {
 }
 
 function analystReport(asset, score, research) {
-  const strongest = score.factors.strongest[0].toLowerCase();
-  const weakest = score.factors.weakest[0].toLowerCase();
-  const improve = score.verdict === "Buy"
-    ? "A materially higher valuation, weaker margins, or negative earnings revisions would pressure the Buy rating."
-    : score.verdict === "Hold"
-      ? "Stronger revenue growth, better profitability, lower leverage, or a lower valuation would improve the score."
-      : "Sustained growth, improving margins, stronger balance-sheet data, and a more attractive valuation could move this away from Sell.";
+  const limitations = dataLimitations(score);
   return [
-    ["Main reason", `${asset.symbol} is ${score.verdict} because ${strongest} is the strongest model input while ${weakest} is the main offset.`],
-    ["Bull case", research.strengths[0] || "The bull case depends on improving fundamentals and constructive sentiment."],
-    ["Bear case", research.risks[0] || research.weaknesses[0] || "The bear case is valuation compression, weaker earnings, or higher volatility."],
-    ["What would change it", improve]
+    ["Thesis", verdictExplanation(asset, score)],
+    ["Key Supports", research.strengths.slice(0, 2).join(" ") || "No decisive support is visible in the available data."],
+    ["Key Risks", research.risks.slice(0, 2).join(" ") || "Valuation, earnings revisions, and sector conditions remain the principal risks."],
+    ["Valuation View", valuationInterpretation(asset)],
+    ["Portfolio Fit", portfolioFitNarrative(asset)],
+    ["Data Limitations", limitations]
   ];
+}
+
+function dataLimitations(score) {
+  if (!score.confidence.missing.length) return "Core research fields are available. Fundamentals can still lag the latest quarterly filing or provider refresh.";
+  return `Some advanced metrics are unavailable from current data providers, including ${score.confidence.missing.slice(0, 6).map(metricDisplayName).join(", ")}. These gaps reduce confidence but are not replaced with synthetic values.`;
+}
+
+function sentenceCase(value) {
+  const text = String(value || "");
+  return text ? text[0].toUpperCase() + text.slice(1) : text;
 }
 
 function valuationInterpretation(asset) {
@@ -573,17 +576,17 @@ async function bootHome() {
     $("#landingProvider").textContent = health.provider;
     const asset = await marketApi.asset("AAPL", true);
     const score = scoreAsset(asset);
-    $("#landingScore").textContent = `${score.overall}/100`;
+    $("#landingScore").textContent = qualitativeFactor("valuation", score.categories.valuation);
     $("#landingVerdict").textContent = score.verdict;
     $("#landingConfidence").textContent = score.confidence.level;
-    $("#landingQuality").textContent = `${score.dataQuality.score}/100`;
+    $("#landingQuality").textContent = coverageLabel(score.dataQuality);
     $("#previewSymbol").textContent = asset.symbol;
     $("#previewName").textContent = asset.name;
     $("#previewPrice").textContent = money(asset.price, asset.currency);
     $("#previewMove").textContent = formatDailyMove(asset);
     $("#previewMove").className = isRealNumber(asset.change) ? asset.change >= 0 ? "positive" : "negative" : "muted";
     $("#previewVerdict").textContent = score.verdict;
-    $("#previewVerdict").className = `verdict-badge ${score.verdict.toLowerCase()}`;
+    $("#previewVerdict").className = "verdict-badge";
     $("#previewExplanation").textContent = verdictExplanation(asset, score);
   } catch (error) {
     $("#landingProvider").textContent = "Offline";
@@ -607,7 +610,7 @@ async function bootDashboard() {
   try {
     const health = await loadHealth();
     $("#providerLabel").textContent = health.provider;
-    $("#marketState").textContent = `${health.status}. Keys: Finnhub ${health.env.finnhubConfigured ? "configured" : "not set"}, Alpha Vantage ${health.env.alphaVantageConfigured ? "configured" : "not set"}.`;
+    $("#marketState").textContent = health.status;
     $("#dataModeCopy").textContent = `${health.provider} is active. Search and quotes use the provider first; missing fields stay marked unavailable instead of being invented.`;
   } catch (error) {
     $("#providerLabel").textContent = "Market server offline";
@@ -628,7 +631,7 @@ function renderInitialAssetShell() {
   $("#assetTags").innerHTML = `<span class="asset-tag">Default analysis loads automatically</span>`;
   $("#stockPrice").textContent = "Connecting...";
   $("#dailyMove").textContent = "Fetching current quote";
-  $("#assetSource").textContent = "Aurex is loading the default asset automatically so the dashboard is ready without a first search.";
+  $("#assetSource").textContent = "Loading provider, freshness, and field-level diagnostic information.";
 }
 
 async function refreshDashboardData() {
@@ -665,25 +668,25 @@ function renderAsset(asset) {
   $("#assetTags").innerHTML = [
     asset.sector,
     asset.industry,
-    asset.live ? asset.marketState || "Provider quote" : "Unavailable quote",
-    asset.provider
+    asset.live ? asset.marketState || "Market data available" : "Market data unavailable"
   ].filter(Boolean).map((item) => `<span class="asset-tag">${item}</span>`).join("");
   $("#stockPrice").textContent = money(asset.price, asset.currency);
   $("#dailyMove").textContent = formatDailyMove(asset);
   $("#dailyMove").className = isRealNumber(asset.change) ? asset.change >= 0 ? "positive" : "negative" : "muted";
   $("#assetUpdated").textContent = `Last updated ${displayDate(asset.lastUpdated)}`;
-  $("#assetSource").textContent = `${asset.sourceNote || "Provider details unavailable."} Data updated ${displayDate(asset.freshness?.priceData || asset.lastUpdated)}. Analysis generated ${displayDate(asset.analysisGeneratedAt)}. Fundamental metrics may lag quarterly filings even when price data is live.`;
+  $("#assetSource").textContent = `${asset.sourceNote || "Provider details unavailable."} Price data updated ${displayDate(asset.freshness?.priceData || asset.lastUpdated)}. Analysis generated ${displayDate(asset.analysisGeneratedAt)}. Fundamental metrics may lag quarterly filings even when price data updates intraday.`;
   $("#companyVerdict").textContent = score.verdict;
-  $("#companyVerdict").className = `verdict-badge ${score.verdict.toLowerCase()}`;
+  $("#companyVerdict").className = "verdict-badge";
   $("#confidenceBadge").textContent = `${score.confidence.level} confidence`;
-  $("#confidenceBadge").className = `confidence-badge ${score.confidence.level.toLowerCase()}`;
-  $("#dataQualityBadge").textContent = `Data Quality ${score.dataQuality.score}/100`;
+  $("#confidenceBadge").className = "confidence-badge";
+  $("#dataQualityBadge").textContent = `Coverage: ${coverageLabel(score.dataQuality)}`;
   renderTrustStrip(asset, score);
+  renderDataDetails(asset, score);
   $("#watchlistToggle").textContent = state.watchlist.includes(asset.symbol) ? "Remove from watchlist" : "Add to watchlist";
-  $("#standaloneScore").textContent = `Score ${score.overall}/100`;
+  $("#standaloneScore").textContent = `${score.verdict} · ${score.confidence.level} confidence`;
   $("#keyStatsGrid").innerHTML = renderMetricCards(keyStatsRows(asset));
-  $("#financialMetricsGrid").innerHTML = renderMetricCards(financialMetricRows(asset));
-  $("#missingDataLabel").textContent = score.confidence.missing.length ? `${score.confidence.missing.length} fields unavailable` : "Core fields available";
+  $("#financialMetricsGrid").innerHTML = renderFinancialMetricGroups(asset);
+  $("#missingDataLabel").textContent = score.confidence.missing.length ? "Some advanced fields are unavailable" : "Core fields available";
   $("#verdictExplanation").textContent = verdictExplanation(asset, score);
   $("#confidenceNote").textContent = confidenceCopy(score);
   $("#dataQualityPanel").innerHTML = renderDataQuality(score.dataQuality);
@@ -702,14 +705,57 @@ function renderAsset(asset) {
 }
 
 function renderTrustStrip(asset, score) {
-  const mainSource = asset.sources?.price || asset.sources?.peRatio || asset.provider || "Unavailable";
   $("#trustStrip").innerHTML = [
-    ["Provider", asset.provider || "Unavailable"],
+    ["Market data", asset.live ? asset.marketState || "Available" : "Unavailable"],
     ["Updated", displayDate(asset.lastUpdated)],
-    ["Data Quality", `${score.dataQuality.score}/100`],
+    ["Coverage", coverageLabel(score.dataQuality)],
     ["Confidence", score.confidence.level],
-    ["Main source", mainSource]
+    ["Fundamentals", "Periodic"]
   ].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
+}
+
+function coverageLabel(dataQuality) {
+  if (dataQuality.score >= 100) return "Complete";
+  if (dataQuality.score >= 60) return "Partial";
+  return "Limited";
+}
+
+function renderDataDetails(asset, score) {
+  const sourceRows = Object.entries(asset.sources || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([field, source]) => `<tr><td>${escapeHtml(metricDisplayName(field))}</td><td>${escapeHtml(source)}</td></tr>`)
+    .join("");
+  const diagnosticRows = Object.entries(asset.metricDiagnostics || {})
+    .map(([field, diagnostic]) => `<li><strong>${escapeHtml(metricDisplayName(field))}</strong><span>${escapeHtml(diagnostic.reason || "Unavailable from current provider.")}</span></li>`)
+    .join("");
+  $("#dataDetailsPanel").innerHTML = `
+    <div class="data-detail-summary">
+      <div><span>Coverage</span><strong>${coverageLabel(score.dataQuality)}</strong></div>
+      <div><span>Investment confidence</span><strong>${score.confidence.level}</strong></div>
+      <div><span>Active provider</span><strong>${escapeHtml(asset.provider || "Unavailable")}</strong></div>
+      <div><span>Analysis generated</span><strong>${displayDate(asset.analysisGeneratedAt)}</strong></div>
+    </div>
+    ${sourceRows ? `<div class="data-detail-table"><h3>Field sources</h3><table><tbody>${sourceRows}</tbody></table></div>` : ""}
+    <div class="data-detail-diagnostics">
+      <h3>Provider diagnostics</h3>
+      ${diagnosticRows ? `<ul>${diagnosticRows}</ul>` : "<p>No missing core-field diagnostics were reported.</p>"}
+    </div>
+  `;
+}
+
+function metricDisplayName(field) {
+  return String(field || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function keyStatsRows(asset) {
@@ -727,23 +773,76 @@ function keyStatsRows(asset) {
   ];
 }
 
-function financialMetricRows(asset) {
+function financialMetricGroups(asset) {
   return [
-    metricRow(asset, "Market cap", "marketCap", asset.marketCap ? `$${compactNumber(asset.marketCap)}` : "Unavailable"),
-    metricRow(asset, "P/E ratio", "peRatio", number(asset.peRatio, 2), valuationBadge(asset)),
-    metricRow(asset, "Beta", "beta", number(asset.beta, 2), betaBadge(asset)),
-    metricRow(asset, "EPS", "eps", money(asset.eps, asset.currency)),
-    metricRow(asset, "Revenue growth", "revenueGrowth", percent(asset.revenueGrowth)),
-    metricRow(asset, "Profit margin", "profitMargin", percent(asset.profitMargin, false), marginBadge(asset)),
-    metricRow(asset, "Forward P/E", "forwardPe", number(asset.forwardPe, 2)),
-    metricRow(asset, "Price-to-book", "priceToBook", number(asset.priceToBook, 2)),
-    metricRow(asset, "Dividend yield", "dividendYield", percent(asset.dividendYield, false)),
-    metricRow(asset, "Earnings growth", "earningsGrowth", percent(asset.earningsGrowth)),
-    metricRow(asset, "Operating margin", "operatingMargin", percent(asset.operatingMargin, false)),
-    metricRow(asset, "Debt-to-equity", "debtToEquity", asset.debtToEquity === null ? "Unavailable" : number(asset.debtToEquity, 2)),
-    metricRow(asset, "Return on equity", "returnOnEquity", percent(asset.returnOnEquity, false)),
-    metricRow(asset, "Sector / industry", "sector", `${asset.sector || "Unavailable"} / ${asset.industry || "Unavailable"}`)
+    ["Valuation", [
+      metricRow(asset, "Market cap", "marketCap", asset.marketCap ? `$${compactNumber(asset.marketCap)}` : "Unavailable"),
+      metricRow(asset, "P/E ratio", "peRatio", number(asset.peRatio, 2), valuationBadge(asset)),
+      metricRow(asset, "Forward P/E", "forwardPe", number(asset.forwardPe, 2)),
+      metricRow(asset, "PEG ratio", "pegRatio", number(asset.pegRatio, 2)),
+      metricRow(asset, "Price-to-book", "priceToBook", number(asset.priceToBook, 2)),
+      metricRow(asset, "EV / EBITDA", "evToEbitda", number(asset.evToEbitda, 2)),
+      metricRow(asset, "EV / Sales", "evToSales", number(asset.evToSales, 2))
+    ]],
+    ["Growth", [
+      metricRow(asset, "Revenue growth", "revenueGrowth", percent(asset.revenueGrowth)),
+      metricRow(asset, "Earnings growth", "earningsGrowth", percent(asset.earningsGrowth)),
+      metricRow(asset, "Free cash flow growth", "freeCashFlowGrowth", percent(asset.freeCashFlowGrowth))
+    ]],
+    ["Profitability", [
+      metricRow(asset, "EPS", "eps", money(asset.eps, asset.currency)),
+      metricRow(asset, "Gross margin", "grossMargin", percent(asset.grossMargin, false)),
+      metricRow(asset, "Operating margin", "operatingMargin", percent(asset.operatingMargin, false)),
+      metricRow(asset, "Net margin", "profitMargin", percent(asset.profitMargin, false), marginBadge(asset)),
+      metricRow(asset, "Return on equity", "returnOnEquity", percent(asset.returnOnEquity, false)),
+      metricRow(asset, "Return on assets", "returnOnAssets", percent(asset.returnOnAssets, false))
+    ]],
+    ["Balance Sheet", [
+      metricRow(asset, "Debt-to-equity", "debtToEquity", asset.debtToEquity === null ? "Unavailable" : number(asset.debtToEquity, 2)),
+      metricRow(asset, "Current ratio", "currentRatio", number(asset.currentRatio, 2)),
+      metricRow(asset, "Quick ratio", "quickRatio", number(asset.quickRatio, 2)),
+      metricRow(asset, "Cash per share", "cashPerShare", money(asset.cashPerShare, asset.currency))
+    ]],
+    ["Risk", [
+      metricRow(asset, "Beta", "beta", number(asset.beta, 2), betaBadge(asset)),
+      metricRow(asset, "Annualized volatility", "volatility", percent(asset.volatility, false)),
+      metricRow(asset, "Institutional ownership", "institutionalOwnership", percent(asset.institutionalOwnership, false)),
+      metricRow(asset, "Short interest", "shortInterest", percent(asset.shortInterest, false))
+    ]],
+    ["Dividends", [
+      metricRow(asset, "Dividend yield", "dividendYield", percent(asset.dividendYield, false)),
+      metricRow(asset, "Payout ratio", "payoutRatio", percent(asset.payoutRatio, false))
+    ]]
   ];
+}
+
+function renderFinancialMetricGroups(asset) {
+  let missingCount = 0;
+  const groups = financialMetricGroups(asset).map(([title, rows]) => {
+    const available = rows.filter((row) => !isUnavailableValue(row.value));
+    missingCount += rows.length - available.length;
+    if (!available.length) return "";
+    return `
+      <section class="financial-group">
+        <h3>${title}</h3>
+        <div class="financial-table">${available.map(renderMetricRow).join("")}</div>
+      </section>
+    `;
+  }).join("");
+  const limitation = missingCount
+    ? `<p class="metric-unavailable-note">Some advanced metrics are unavailable from current data providers. Open Data details for field-level diagnostics.</p>`
+    : "";
+  return `${groups}${limitation}`;
+}
+
+function renderMetricRow(row) {
+  return `
+    <div class="metric financial-metric">
+      <span>${row.label}${row.tooltip ? `<button class="metric-help" type="button" title="${row.tooltip}">?</button>` : ""}</span>
+      <strong>${row.value}</strong>
+      ${row.badge ? `<em class="metric-context">${row.badge.text}</em>` : ""}
+    </div>
+  `;
 }
 
 function renderMetricCards(rows) {
@@ -756,22 +855,11 @@ function renderMetricCards(rows) {
   const available = normalized.filter((row) => !isUnavailableValue(row.value));
   const missing = normalized.filter((row) => isUnavailableValue(row.value));
   const cards = available.map((row) => {
-    return `
-    <div class="metric">
-      <span>${row.label}${row.tooltip ? `<button class="metric-help" type="button" title="${row.tooltip}">?</button>` : ""}</span>
-      <strong>${row.value}</strong>
-      ${row.badge ? `<em class="metric-badge ${row.badge.tone}">${row.badge.text}</em>` : ""}
-      <small class="metric-source">Source: ${row.source}</small>
-    </div>
-  `;
+    return renderMetricRow(row);
   });
   if (missing.length) {
     cards.push(`
-      <div class="metric missing-metric-group">
-        <span>Unavailable from current provider</span>
-        <strong>${missing.length} field${missing.length === 1 ? "" : "s"}</strong>
-        <small class="metric-source">${missing.map((row) => row.label).join(", ")}</small>
-      </div>
+      <p class="metric-unavailable-note">Some advanced metrics are unavailable from current data providers.</p>
     `);
   }
   return cards.join("");
@@ -836,14 +924,13 @@ function formatDailyMove(asset) {
 }
 
 function renderDataQuality(dataQuality) {
-  const tone = dataQuality.score >= 80 ? "good" : dataQuality.score >= 55 ? "neutral" : "watch";
   return `
-    <div class="quality-card ${tone}">
+    <div class="quality-card">
       <div>
-        <strong>Data Quality: ${dataQuality.score}/100</strong>
-        <p>${dataQuality.summary}</p>
+        <strong>Coverage: ${coverageLabel(dataQuality)}</strong>
+        <p>${dataQuality.missing.length ? "Some advanced metrics are unavailable from current data providers." : "Core research fields are available."}</p>
       </div>
-      <small>${dataQuality.missing.length ? `Missing: ${dataQuality.missing.slice(0, 5).join(", ")}` : "All tracked quality fields available."}</small>
+      <small>${dataQuality.missing.length ? "Field-level limitations are listed under Data details." : "Fundamentals may still lag periodic filings."}</small>
     </div>
   `;
 }
@@ -862,50 +949,60 @@ function renderScoreBars(categories, asset) {
     const [label, driver] = labels[key];
     const copy = scoreCategoryCopy(key, value);
     return `
-      <div class="score-card">
-        <div class="score-card-head">
+      <div class="factor-row">
+        <div class="factor-row-head">
           <span>${label}</span>
-          <strong>${value}/100</strong>
+          <strong>${qualitativeFactor(key, value)}</strong>
         </div>
-        <div class="bar-track"><div class="bar-fill" style="width:${value}%"></div></div>
         <p>${copy}</p>
-        <small>${weight}% weight / ${driver}</small>
+        <small>${driver}</small>
       </div>
     `;
   });
+  const fit = portfolioFitScore(asset);
   cards.push(`
-    <div class="score-card">
-      <div class="score-card-head">
+    <div class="factor-row">
+      <div class="factor-row-head">
         <span>Portfolio fit</span>
-        <strong>${portfolioFitScore(asset)}/100</strong>
+        <strong>${qualitativeFactor("portfolioFit", fit)}</strong>
       </div>
-      <div class="bar-track"><div class="bar-fill" style="width:${portfolioFitScore(asset)}%"></div></div>
-      <p>${portfolioFitScore(asset) >= 70 ? "This asset appears compatible with the current simulated portfolio." : "This asset may add concentration or risk relative to current portfolio settings."}</p>
-      <small>Personalized / sector exposure, risk tolerance, and current holdings</small>
+      <p>${fit >= 70 ? "The asset is broadly compatible with the current simulated portfolio." : "The asset may increase concentration or risk under current portfolio settings."}</p>
+      <small>Sector exposure, risk tolerance, and current holdings</small>
     </div>
   `);
   return cards.join("");
+}
+
+function qualitativeFactor(key, value) {
+  if (key === "valuation") return value >= 70 ? "Attractive" : value >= 45 ? "Fair" : "Elevated";
+  if (key === "growth") return value >= 70 ? "Strong" : value >= 45 ? "Stable" : "Weak";
+  if (key === "profitability") return value >= 70 ? "Strong" : value >= 45 ? "Average" : "Weak";
+  if (key === "balanceSheet") return value >= 70 ? "Strong" : value >= 45 ? "Adequate" : "Weak";
+  if (key === "risk") return value >= 70 ? "Low" : value >= 45 ? "Moderate" : "High";
+  if (key === "newsSentiment") return value >= 70 ? "Constructive" : value >= 45 ? "Neutral" : "Negative";
+  if (key === "portfolioFit") return value >= 70 ? "Strong" : value >= 45 ? "Neutral" : "Weak";
+  return value >= 70 ? "Strong" : value >= 45 ? "Neutral" : "Weak";
 }
 
 function scoreCategoryCopy(key, value) {
   if (value >= 70) {
     return {
       valuation: "Valuation is supportive relative to available benchmarks.",
-      growth: "Growth signals are helping the score.",
+      growth: "Growth indicators are supportive.",
       profitability: "Margins are a clear positive.",
       balanceSheet: "Financial strength appears supportive.",
       risk: "Risk indicators look manageable.",
       newsSentiment: "Recent news tone is constructive."
     }[key];
   }
-  if (value >= 45) return "This factor is neutral to mixed based on available data.";
+  if (value >= 45) return "Available evidence is balanced to mixed.";
   return {
     valuation: "Valuation is elevated or incomplete.",
     growth: "Growth is weak or unavailable.",
-    profitability: "Profitability is below model preference or missing.",
+    profitability: "Profitability is below the preferred range or incomplete.",
     balanceSheet: "Balance-sheet data is weak or incomplete.",
     risk: "Risk indicators are elevated.",
-    newsSentiment: "News tone is a drag."
+    newsSentiment: "Recent news flow is unfavorable."
   }[key];
 }
 
@@ -920,10 +1017,10 @@ function renderAnalystReport(rows) {
 
 function renderResearchCards(research) {
   const cards = [
-    ["Strengths", research.strengths],
-    ["Weaknesses", research.weaknesses],
-    ["Major risks", research.risks],
-    ["Key catalysts", research.catalysts]
+    ["Key Supports", research.strengths],
+    ["Offsets", research.weaknesses],
+    ["Key Risks", research.risks],
+    ["Catalysts", research.catalysts]
   ];
   return cards.map(([title, items]) => `
     <div class="research-card">
@@ -959,7 +1056,6 @@ function renderSectorComparison(asset) {
     <div class="research-card">
       <h3>${row.title}</h3>
       <p class="explanation">${row.copy}</p>
-      <small class="metric-source">${benchmark.source || "Estimated sector benchmark"}</small>
     </div>
   `).join("");
 }
@@ -1024,7 +1120,6 @@ function renderEarningsCatalyst(asset, research) {
     <div class="research-card">
       <h3>${row.title}</h3>
       <p class="explanation">${row.copy}</p>
-      <small class="metric-source">${row.source}</small>
     </div>
   `).join("");
 }
@@ -1040,32 +1135,35 @@ function metricCatalyst(title, copy, asset, field) {
 
 function renderNews(asset) {
   const score = newsScore(asset.news);
-  $("#newsScoreLabel").textContent = asset.news?.length ? `Sentiment ${Math.round(score)}/100` : "No recent news returned";
+  $("#newsScoreLabel").textContent = asset.news?.length ? `News tone: ${qualitativeFactor("newsSentiment", score)}` : "No recent news returned";
   if (!asset.news?.length) {
     $("#newsList").innerHTML = `<div class="empty-state">No recent news was returned by the active provider. News is treated as neutral and cannot overpower fundamentals.</div>`;
     return;
   }
-  $("#newsList").innerHTML = asset.news.slice(0, 5).map((item) => `
-    <article class="news-item">
-      <a href="${item.url || "#"}" target="_blank" rel="noreferrer">${item.headline}</a>
-      <div class="news-meta">
-        <span>${item.source || "Unknown source"}</span>
-        <span>${displayDate(item.date)}</span>
-        <span class="sentiment ${item.sentiment}">${item.sentiment}</span>
-      </div>
-      <p class="explanation">${item.summary || "No summary returned by the provider."}</p>
-      <small class="metric-source">Why this matters: ${whyNewsMatters(item)}</small>
-    </article>
-  `).join("");
+  $("#newsList").innerHTML = asset.news.slice(0, 5).map((item) => {
+    const relevance = whyNewsMatters(item);
+    return `
+      <article class="news-item">
+        <div class="news-meta">
+          <span>${item.source || "Unknown source"}</span>
+          <span>${displayDate(item.date)}</span>
+          <span class="sentiment">${item.sentiment}</span>
+        </div>
+        <a href="${item.url || "#"}" target="_blank" rel="noreferrer">${item.headline}</a>
+        <p class="explanation">${item.summary || "No summary returned by the provider."}</p>
+        ${relevance ? `<small class="news-relevance">${relevance}</small>` : ""}
+      </article>
+    `;
+  }).join("");
 }
 
 function whyNewsMatters(item) {
   const text = `${item.headline || ""} ${item.summary || ""}`.toLowerCase();
-  if (text.includes("earnings") || text.includes("profit") || text.includes("margin")) return "earnings and margins can directly affect valuation and the model score.";
-  if (text.includes("ai") || text.includes("cloud") || text.includes("chip")) return "technology investment themes may affect future revenue growth expectations.";
-  if (text.includes("upgrade") || text.includes("downgrade") || text.includes("analyst")) return "analyst revisions can influence near-term sentiment, though fundamentals still carry more weight.";
-  if (text.includes("lawsuit") || text.includes("probe") || text.includes("regulator")) return "legal or regulatory pressure can increase risk and uncertainty.";
-  return "recent news can shift sentiment, but Aurex keeps fundamentals as the main driver.";
+  if (text.includes("earnings") || text.includes("profit") || text.includes("margin")) return "Earnings and margin developments can alter valuation assumptions.";
+  if (text.includes("ai") || text.includes("cloud") || text.includes("chip")) return "Capital spending and technology demand may affect forward revenue expectations.";
+  if (text.includes("upgrade") || text.includes("downgrade") || text.includes("analyst")) return "Estimate revisions can influence near-term positioning and expectations.";
+  if (text.includes("lawsuit") || text.includes("probe") || text.includes("regulator")) return "Legal or regulatory developments can raise uncertainty and execution risk.";
+  return "";
 }
 
 async function runSearch() {
@@ -1137,7 +1235,7 @@ async function renderComparison(force = false) {
     const best = ranked[0];
     const second = ranked[1];
     $("#comparisonSummary").textContent = second
-      ? `${best.asset.symbol} appears strongest overall because it has the best score (${best.score.overall}/100), ${best.score.confidence.level.toLowerCase()} confidence, and data quality of ${best.score.dataQuality.score}/100. Its edge is ${best.score.factors.strongest[0].toLowerCase()}, while ${second.asset.symbol}'s biggest drag is ${second.score.factors.weakest[0].toLowerCase()}. Compare valuation, growth, risk, and portfolio fit before treating this as a decision signal.`
+      ? `${best.asset.symbol} presents the strongest overall research profile in this group, led by ${best.score.factors.strongest[0].toLowerCase()} and a ${qualitativeFactor("valuation", best.score.categories.valuation).toLowerCase()} valuation view. ${second.asset.symbol} remains more constrained by ${second.score.factors.weakest[0].toLowerCase()}. Relative conclusions should be read alongside growth, risk, and portfolio fit.`
       : `${best.asset.symbol} is selected. Add another asset for a relative conclusion.`;
     renderComparisonWinners(scored);
     $("#comparisonTable").innerHTML = comparisonTable(scored);
@@ -1154,12 +1252,12 @@ function renderComparisonWinners(scored) {
     return `<div class="winner-card"><span>${label}</span><strong>${picked.asset.symbol}</strong><small>${reason(picked)}</small></div>`;
   };
   $("#comparisonWinners").innerHTML = [
-    winner("Strongest valuation", (a, b) => b.score.categories.valuation - a.score.categories.valuation, (item) => `Valuation ${Math.round(item.score.categories.valuation)}/100`),
-    winner("Strongest growth", (a, b) => b.score.categories.growth - a.score.categories.growth, (item) => `Growth ${Math.round(item.score.categories.growth)}/100`),
-    winner("Lowest risk", (a, b) => b.score.categories.risk - a.score.categories.risk, (item) => `Risk score ${Math.round(item.score.categories.risk)}/100`),
-    winner("Best overall", (a, b) => b.score.overall - a.score.overall, (item) => `${item.score.overall}/100 ${item.score.verdict}`),
-    winner("Best data quality", (a, b) => b.score.dataQuality.score - a.score.dataQuality.score, (item) => `Data ${item.score.dataQuality.score}/100`),
-    winner("Best portfolio fit", (a, b) => portfolioFitScore(b.asset) - portfolioFitScore(a.asset), (item) => `Fit ${portfolioFitScore(item.asset)}/100`)
+    winner("Strongest valuation", (a, b) => b.score.categories.valuation - a.score.categories.valuation, (item) => qualitativeFactor("valuation", item.score.categories.valuation)),
+    winner("Strongest growth", (a, b) => b.score.categories.growth - a.score.categories.growth, (item) => qualitativeFactor("growth", item.score.categories.growth)),
+    winner("Lowest risk", (a, b) => b.score.categories.risk - a.score.categories.risk, (item) => `${qualitativeFactor("risk", item.score.categories.risk)} risk`),
+    winner("Best overall view", (a, b) => b.score.overall - a.score.overall, (item) => item.score.verdict),
+    winner("Best coverage", (a, b) => b.score.dataQuality.score - a.score.dataQuality.score, (item) => coverageLabel(item.score.dataQuality)),
+    winner("Best portfolio fit", (a, b) => portfolioFitScore(b.asset) - portfolioFitScore(a.asset), (item) => qualitativeFactor("portfolioFit", portfolioFitScore(item.asset)))
   ].join("");
 }
 
@@ -1176,9 +1274,11 @@ function comparisonTable(scored) {
     ["Debt-to-equity", ...scored.map(({ asset }) => asset.debtToEquity === null ? "Unavailable" : number(asset.debtToEquity, 2))],
     ["Beta", ...scored.map(({ asset }) => number(asset.beta, 2))],
     ["52-week range", ...scored.map(({ asset }) => weekRange(asset))],
-    ["News sentiment", ...scored.map(({ asset }) => `${Math.round(newsScore(asset.news))}/100`)],
-    ["Data quality", ...scored.map(({ score }) => `${score.dataQuality.score}/100`)],
-    ["Overall score", ...scored.map(({ score }) => `${score.overall}/100`)],
+    ["News tone", ...scored.map(({ asset }) => qualitativeFactor("newsSentiment", newsScore(asset.news)))],
+    ["Coverage", ...scored.map(({ score }) => coverageLabel(score.dataQuality))],
+    ["Valuation view", ...scored.map(({ score }) => qualitativeFactor("valuation", score.categories.valuation))],
+    ["Growth view", ...scored.map(({ score }) => qualitativeFactor("growth", score.categories.growth))],
+    ["Risk view", ...scored.map(({ score }) => qualitativeFactor("risk", score.categories.risk))],
     ["Confidence", ...scored.map(({ score }) => score.confidence.level)],
     ["Verdict", ...scored.map(({ score }) => score.verdict)]
   ];
@@ -1402,7 +1502,7 @@ function renderPortfolioAware(asset, standaloneScore) {
   const sectorPct = total ? sectorValue / total * 100 : 0;
   const owned = holdings.find((holding) => holding.symbol === asset.symbol);
   let verdict = standaloneScore.verdict;
-  const reasons = [`${asset.symbol} is rated ${standaloneScore.verdict} as a standalone asset at ${standaloneScore.overall}/100.`];
+  const reasons = [`${asset.symbol} carries a ${standaloneScore.verdict.toLowerCase()} standalone investment view.`];
   if (standaloneScore.verdict === "Buy" && sectorPct > 45) {
     verdict = "Hold";
     reasons.push(`For this portfolio, it becomes a Hold because ${asset.sector} already makes up ${sectorPct.toFixed(1)}% of holdings.`);
@@ -1435,6 +1535,12 @@ function renderPortfolioAware(asset, standaloneScore) {
     `Virtual cash: ${money(cash)}`
   ].map((item) => `<span class="suggestion-pill">${item}</span>`).join("");
   renderTradeImpact(asset);
+}
+
+function portfolioFitNarrative(asset) {
+  const fit = portfolioFitScore(asset);
+  const label = qualitativeFactor("portfolioFit", fit).toLowerCase();
+  return `${asset.symbol} has a ${label} fit with the current simulated portfolio based on sector exposure, position concentration, risk tolerance, and existing holdings.`;
 }
 
 function portfolioFitScore(asset) {
@@ -1627,13 +1733,13 @@ function drawComparisonChart(canvas, scored) {
     const x = 70 + index * ((width - 120) / scored.length) + 12;
     const barHeight = (score.overall / 100) * (height - 72);
     const y = height - 38 - barHeight;
-    ctx.fillStyle = score.verdict === "Buy" ? "#0f8a5f" : score.verdict === "Sell" ? "#c24135" : "#b7791f";
+    ctx.fillStyle = cssVar("--accent");
     roundedRect(ctx, x, y, barWidth, barHeight, 8);
     ctx.fill();
     ctx.fillStyle = canvasTextColor();
     ctx.font = "800 13px system-ui";
     ctx.fillText(asset.symbol, x, height - 14);
-    ctx.fillText(score.overall, x, y - 8);
+    ctx.fillText(score.verdict, x, y - 8);
   });
 }
 
@@ -1789,7 +1895,7 @@ async function renderWatchlist() {
     return `
       <button type="button" class="side-asset" data-symbol="${symbol}">
         <span><strong>${symbol}</strong><small>${asset ? `${money(asset.price, asset.currency)} / ${formatDailyMove(asset)}` : "Temporarily unavailable"}</small></span>
-        <em>${score ? `${score.verdict} / DQ ${score.dataQuality.score}` : "Open"}</em>
+        <em>${score ? `${score.verdict} · ${coverageLabel(score.dataQuality)} coverage` : "Open"}</em>
       </button>
     `;
   }).join("");
