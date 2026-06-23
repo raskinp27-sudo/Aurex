@@ -219,7 +219,7 @@ function displayDate(value) {
 
 function friendlyError(message) {
   const text = String(message || "");
-  if (text.includes("429") || text.toLowerCase().includes("rate limit")) return "Provider rate limit reached. Try again shortly.";
+  if (text.includes("429") || text.toLowerCase().includes("rate limit")) return "Market data is temporarily rate-limited. Try again shortly.";
   if (text.toLowerCase().includes("failed to fetch")) return "Some data is temporarily unavailable.";
   if (text.toLowerCase().includes("request failed")) return "Some data is temporarily unavailable.";
   return text || "Some data is temporarily unavailable.";
@@ -371,7 +371,7 @@ function dataQualityScore(asset) {
     ? "Most key metrics are available."
     : score >= 55
       ? "Core quote data is available, but some fundamentals are missing."
-      : "This asset has limited fundamentals from the current provider.";
+      : "This asset has limited fundamental coverage.";
   return { score, missing, summary, available, total: DATA_QUALITY_FIELDS.length };
 }
 
@@ -421,8 +421,8 @@ function buildResearch(asset, score) {
   if (score.categories.valuation < 50) weaknesses.push("Valuation looks demanding relative to available benchmarks.");
   if (score.categories.growth < 50) weaknesses.push("Growth signals are weak or missing, reducing conviction.");
   if (score.confidence.missing.length) weaknesses.push(`Unavailable fields include ${score.confidence.missing.slice(0, 8).map(metricDisplayName).join(", ")}.`);
-  if (!asset.live) weaknesses.push("Live or delayed market data was unavailable, so the verdict should be treated cautiously.");
-  if (!weaknesses.length) weaknesses.push("No severe weakness stands out in the currently available provider data.");
+  if (!asset.live) weaknesses.push("Current market data was unavailable, so the investment view should be treated cautiously.");
+  if (!weaknesses.length) weaknesses.push("No severe weakness stands out in the currently available research data.");
 
   if (asset.beta !== null && asset.beta > 1.35) risks.push(`Higher beta of ${number(asset.beta, 2)} can increase volatility.`);
   if (asset.beta === null && asset.volatility !== null) risks.push(`Beta is unavailable; annualized historical volatility of ${number(asset.volatility, 1)}% is used instead.`);
@@ -451,16 +451,9 @@ function verdictExplanation(asset, score) {
   const strongest = score.factors.strongest[0].toLowerCase();
   const weakest = score.factors.weakest[0].toLowerCase();
   const valuation = qualitativeFactor("valuation", score.categories.valuation).toLowerCase();
-  const normal = `${asset.name} carries a ${score.verdict.toLowerCase()} investment view. ${sentenceCase(strongest)} is the principal support, while ${weakest} remains the main offset. Valuation appears ${valuation} relative to the available operating and sector evidence, and the conclusion carries ${score.confidence.level.toLowerCase()} confidence.`;
-  const beginner = `${asset.symbol} has a ${score.verdict.toLowerCase()} view. Its strongest area is ${strongest}; ${weakest} is the main concern. The valuation looks ${valuation}, and confidence is ${score.confidence.level.toLowerCase()}.`;
+  const normal = `${asset.name} carries a ${score.verdict.toLowerCase()} investment view. ${sentenceCase(strongest)} is the principal support, while ${weakest} remains the main offset. Valuation appears ${valuation} relative to the available operating and sector evidence.`;
+  const beginner = `${asset.symbol} has a ${score.verdict.toLowerCase()} view. Its strongest area is ${strongest}; ${weakest} is the main concern. The valuation looks ${valuation}.`;
   return explain(normal, beginner);
-}
-
-function confidenceCopy(score) {
-  const missing = score.confidence.missing.slice(0, 6).map(metricDisplayName).join(", ");
-  if (score.confidence.level === "High") return "High confidence: the research view is supported by broad fundamental, market, and recent-price coverage.";
-  if (score.confidence.level === "Medium") return `Medium confidence: the available evidence supports a directional view, although ${missing || "several supporting fields"} remain unavailable.`;
-  return `Low confidence: important inputs are unavailable (${missing || "provider fields"}), so the investment view should be treated as preliminary.`;
 }
 
 function explain(normal, beginner) {
@@ -480,8 +473,8 @@ function analystReport(asset, score, research) {
 }
 
 function dataLimitations(score) {
-  if (!score.confidence.missing.length) return "Core research fields are available. Fundamentals can still lag the latest quarterly filing or provider refresh.";
-  return `Some advanced metrics are unavailable from current data providers, including ${score.confidence.missing.slice(0, 6).map(metricDisplayName).join(", ")}. These gaps reduce confidence but are not replaced with synthetic values.`;
+  if (!score.confidence.missing.length) return "Core research fields are available. Fundamental metrics can still lag the latest quarterly filing.";
+  return `Some advanced metrics are unavailable, including ${score.confidence.missing.slice(0, 6).map(metricDisplayName).join(", ")}. These gaps limit the breadth of the conclusion and are not replaced with synthetic values.`;
 }
 
 function sentenceCase(value) {
@@ -491,14 +484,14 @@ function sentenceCase(value) {
 
 function valuationInterpretation(asset) {
   if (!isRealNumber(asset.peRatio)) {
-    return "Negative or unavailable P/E often means earnings are negative, inconsistent, or unavailable from the current provider.";
+    return "Negative or unavailable P/E often means earnings are negative, inconsistent, or not reported in the current research set.";
   }
   if (isRealNumber(asset.sectorBenchmark?.pe)) {
     if (asset.peRatio > asset.sectorBenchmark.pe * 1.18) return "A P/E above the estimated sector benchmark suggests the stock may be expensive unless growth and margins justify the premium.";
     if (asset.peRatio < asset.sectorBenchmark.pe * 0.82) return "A lower P/E can suggest value, but it may also reflect slower growth or higher perceived risk.";
     return "P/E is near the estimated sector benchmark, so valuation does not dominate the verdict by itself.";
   }
-  return "P/E is available, but sector benchmark data is estimated or unavailable, so valuation confidence is lower.";
+  return "P/E is available, but sector benchmark data is estimated or unavailable, limiting the relative valuation comparison.";
 }
 
 function riskInterpretation(asset) {
@@ -526,7 +519,7 @@ function fairValueEstimate(asset) {
   if (!isRealNumber(asset.eps) || !isRealNumber(asset.price) || asset.eps <= 0) {
     return {
       available: false,
-      copy: "Educational fair value estimate unavailable because EPS or current price was not returned by the provider."
+      copy: "Educational fair value estimate unavailable because EPS or current price is not available."
     };
   }
   const sectorPe = isRealNumber(asset.sectorBenchmark?.pe) ? asset.sectorBenchmark.pe : isRealNumber(asset.peRatio) ? asset.peRatio : 18;
@@ -572,14 +565,14 @@ async function bootHome() {
   applySavedTheme();
   wireThemeToggle();
   try {
-    const health = await loadHealth();
-    $("#landingProvider").textContent = health.provider;
+    await loadHealth();
     const asset = await marketApi.asset("AAPL", true);
     const score = scoreAsset(asset);
     $("#landingScore").textContent = qualitativeFactor("valuation", score.categories.valuation);
     $("#landingVerdict").textContent = score.verdict;
-    $("#landingConfidence").textContent = score.confidence.level;
+    $("#landingConfidence").textContent = qualitativeFactor("risk", score.categories.risk);
     $("#landingQuality").textContent = coverageLabel(score.dataQuality);
+    $("#landingProvider").textContent = qualitativeFactor("portfolioFit", portfolioFitScore(asset));
     $("#previewSymbol").textContent = asset.symbol;
     $("#previewName").textContent = asset.name;
     $("#previewPrice").textContent = money(asset.price, asset.currency);
@@ -589,8 +582,8 @@ async function bootHome() {
     $("#previewVerdict").className = "verdict-badge";
     $("#previewExplanation").textContent = verdictExplanation(asset, score);
   } catch (error) {
-    $("#landingProvider").textContent = "Offline";
-    $("#previewExplanation").textContent = `Live preview unavailable: ${error.message}. Start the server with npm start.`;
+    $("#landingProvider").textContent = "Unavailable";
+    $("#previewExplanation").textContent = `Market preview unavailable: ${error.message}.`;
   } finally {
     $("#landingPreview")?.classList.remove("loading");
   }
@@ -608,14 +601,13 @@ async function bootDashboard() {
   applyPortfolioSettings();
   $("#beginnerToggle").checked = state.beginnerMode;
   try {
-    const health = await loadHealth();
-    $("#providerLabel").textContent = health.provider;
-    $("#marketState").textContent = health.status;
-    $("#dataModeCopy").textContent = `${health.provider} is active. Search and quotes use the provider first; missing fields stay marked unavailable instead of being invented.`;
+    await loadHealth();
+    $("#providerLabel").textContent = "Market data available";
+    $("#marketState").textContent = "Fundamentals updated periodically";
   } catch (error) {
-    $("#providerLabel").textContent = "Market server offline";
-    $("#marketState").textContent = "Start npm start to enable live data.";
-    showAlert(`Live data is not connected: ${error.message}. Aurex does not show fake prices as current market data.`);
+    $("#providerLabel").textContent = "Market data unavailable";
+    $("#marketState").textContent = "Research workspace remains available";
+    showAlert(`Current market data is unavailable: ${error.message}. Aurex does not present estimated prices as current market data.`);
   }
   await loadAsset(state.selectedSymbol);
   $("#searchMessage").textContent = "Search any ticker, company, ETF, crypto pair, sector, or exchange.";
@@ -626,12 +618,12 @@ async function bootDashboard() {
 }
 
 function renderInitialAssetShell() {
-  $("#companyMeta").textContent = "Default asset / loading provider data";
+  $("#companyMeta").textContent = "Preparing default research view";
   $("#companyName").textContent = `${state.selectedSymbol} research dashboard`;
-  $("#assetTags").innerHTML = `<span class="asset-tag">Default analysis loads automatically</span>`;
+  $("#assetTags").innerHTML = `<span class="asset-tag">Market intelligence</span>`;
   $("#stockPrice").textContent = "Connecting...";
   $("#dailyMove").textContent = "Fetching current quote";
-  $("#assetSource").textContent = "Loading provider, freshness, and field-level diagnostic information.";
+  $("#assetSource").textContent = "Loading freshness and field-level diagnostic information.";
 }
 
 async function refreshDashboardData() {
@@ -663,32 +655,27 @@ async function loadAsset(symbol, force = false) {
 function renderAsset(asset) {
   const score = scoreAsset(asset);
   const research = buildResearch(asset, score);
-  $("#companyMeta").textContent = `${asset.assetType} / ${asset.exchange} / ${asset.currency}`;
+  $("#companyMeta").textContent = `${asset.assetType} / ${asset.currency}`;
   $("#companyName").textContent = `${asset.name} (${asset.symbol})`;
-  $("#assetTags").innerHTML = [
-    asset.sector,
-    asset.industry,
-    asset.live ? asset.marketState || "Market data available" : "Market data unavailable"
-  ].filter(Boolean).map((item) => `<span class="asset-tag">${item}</span>`).join("");
+  $("#assetTags").innerHTML = [asset.sector]
+    .filter(Boolean)
+    .map((item) => `<span class="asset-tag">${item}</span>`)
+    .join("");
   $("#stockPrice").textContent = money(asset.price, asset.currency);
   $("#dailyMove").textContent = formatDailyMove(asset);
   $("#dailyMove").className = isRealNumber(asset.change) ? asset.change >= 0 ? "positive" : "negative" : "muted";
   $("#assetUpdated").textContent = `Last updated ${displayDate(asset.lastUpdated)}`;
   $("#assetSource").textContent = `${asset.sourceNote || "Provider details unavailable."} Price data updated ${displayDate(asset.freshness?.priceData || asset.lastUpdated)}. Analysis generated ${displayDate(asset.analysisGeneratedAt)}. Fundamental metrics may lag quarterly filings even when price data updates intraday.`;
-  $("#companyVerdict").textContent = score.verdict;
+  $("#companyVerdict").textContent = `Investment View: ${score.verdict}`;
   $("#companyVerdict").className = "verdict-badge";
-  $("#confidenceBadge").textContent = `${score.confidence.level} confidence`;
-  $("#confidenceBadge").className = "confidence-badge";
-  $("#dataQualityBadge").textContent = `Coverage: ${coverageLabel(score.dataQuality)}`;
   renderTrustStrip(asset, score);
   renderDataDetails(asset, score);
   $("#watchlistToggle").textContent = state.watchlist.includes(asset.symbol) ? "Remove from watchlist" : "Add to watchlist";
-  $("#standaloneScore").textContent = `${score.verdict} · ${score.confidence.level} confidence`;
+  $("#standaloneScore").textContent = "Standalone research view";
   $("#keyStatsGrid").innerHTML = renderMetricCards(keyStatsRows(asset));
   $("#financialMetricsGrid").innerHTML = renderFinancialMetricGroups(asset);
   $("#missingDataLabel").textContent = score.confidence.missing.length ? "Some advanced fields are unavailable" : "Core fields available";
   $("#verdictExplanation").textContent = verdictExplanation(asset, score);
-  $("#confidenceNote").textContent = confidenceCopy(score);
   $("#dataQualityPanel").innerHTML = renderDataQuality(score.dataQuality);
   $("#scoreBars").innerHTML = renderScoreBars(score.categories, asset);
   $("#analystReportGrid").innerHTML = renderAnalystReport(analystReport(asset, score, research));
@@ -706,11 +693,9 @@ function renderAsset(asset) {
 
 function renderTrustStrip(asset, score) {
   $("#trustStrip").innerHTML = [
-    ["Market data", asset.live ? asset.marketState || "Available" : "Unavailable"],
-    ["Updated", displayDate(asset.lastUpdated)],
-    ["Coverage", coverageLabel(score.dataQuality)],
-    ["Confidence", score.confidence.level],
-    ["Fundamentals", "Periodic"]
+    ["Industry", asset.industry || "Not classified"],
+    ["Exchange", asset.exchange || "Unavailable"],
+    ["Last updated", displayDate(asset.lastUpdated)]
   ].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
 }
 
@@ -730,10 +715,10 @@ function renderDataDetails(asset, score) {
     .join("");
   $("#dataDetailsPanel").innerHTML = `
     <div class="data-detail-summary">
-      <div><span>Coverage</span><strong>${coverageLabel(score.dataQuality)}</strong></div>
-      <div><span>Investment confidence</span><strong>${score.confidence.level}</strong></div>
+      <div><span>Research coverage</span><strong>${coverageLabel(score.dataQuality)}</strong></div>
       <div><span>Active provider</span><strong>${escapeHtml(asset.provider || "Unavailable")}</strong></div>
       <div><span>Analysis generated</span><strong>${displayDate(asset.analysisGeneratedAt)}</strong></div>
+      <div><span>Fundamentals</span><strong>Periodic</strong></div>
     </div>
     ${sourceRows ? `<div class="data-detail-table"><h3>Field sources</h3><table><tbody>${sourceRows}</tbody></table></div>` : ""}
     <div class="data-detail-diagnostics">
@@ -830,7 +815,7 @@ function renderFinancialMetricGroups(asset) {
     `;
   }).join("");
   const limitation = missingCount
-    ? `<p class="metric-unavailable-note">Some advanced metrics are unavailable from current data providers. Open Data details for field-level diagnostics.</p>`
+    ? `<p class="metric-unavailable-note">Some advanced metrics are not available in the current research set. Review Research diagnostics for field-level detail.</p>`
     : "";
   return `${groups}${limitation}`;
 }
@@ -859,7 +844,7 @@ function renderMetricCards(rows) {
   });
   if (missing.length) {
     cards.push(`
-      <p class="metric-unavailable-note">Some advanced metrics are unavailable from current data providers.</p>
+      <p class="metric-unavailable-note">Some advanced metrics are not available in the current research set.</p>
     `);
   }
   return cards.join("");
@@ -927,10 +912,10 @@ function renderDataQuality(dataQuality) {
   return `
     <div class="quality-card">
       <div>
-        <strong>Coverage: ${coverageLabel(dataQuality)}</strong>
-        <p>${dataQuality.missing.length ? "Some advanced metrics are unavailable from current data providers." : "Core research fields are available."}</p>
+        <strong>Research Coverage: ${coverageLabel(dataQuality)}</strong>
+        <p>${dataQuality.missing.length ? "Some advanced metrics are not available in the current research set." : "Core research fields are available."}</p>
       </div>
-      <small>${dataQuality.missing.length ? "Field-level limitations are listed under Data details." : "Fundamentals may still lag periodic filings."}</small>
+      <small>${dataQuality.missing.length ? "Field-level limitations are listed under Research diagnostics." : "Fundamentals may still lag periodic filings."}</small>
     </div>
   `;
 }
@@ -1037,13 +1022,13 @@ function renderSectorComparison(asset) {
       title: "P/E vs sector",
       copy: isRealNumber(asset.peRatio) && isRealNumber(benchmark.pe)
         ? `${asset.symbol} trades at ${number(asset.peRatio, 1)}x earnings versus an estimated ${number(benchmark.pe, 1)}x sector benchmark.`
-        : "P/E comparison unavailable because the provider did not return enough valuation data."
+        : "P/E comparison is unavailable because the current research set does not include enough valuation data."
     },
     {
       title: "Profit margin vs sector",
       copy: isRealNumber(asset.profitMargin) && isRealNumber(benchmark.profitMargin)
         ? `${asset.symbol}'s profit margin is ${percent(asset.profitMargin, false)} versus an estimated ${percent(benchmark.profitMargin, false)} sector benchmark.`
-        : "Profit margin comparison unavailable because the provider did not return margin data."
+        : "Profit margin comparison is unavailable because the current research set does not include margin data."
     },
     {
       title: "Beta vs market",
@@ -1064,7 +1049,7 @@ function renderInterpretation(asset) {
   const rows = [
     ["Valuation interpretation", valuationInterpretation(asset)],
     ["Risk interpretation", riskInterpretation(asset)],
-    ["Data freshness", asset.freshness?.note || "Price data may update intraday while fundamentals can lag provider refreshes."]
+    ["Data freshness", "Price data may update intraday while fundamental metrics can lag periodic filings."]
   ];
   $("#interpretationGrid").innerHTML = rows.map(([title, copy]) => `
     <div class="research-card">
@@ -1094,7 +1079,7 @@ function renderFairValue(asset) {
 function renderWeekPosition(asset) {
   const position = weekPosition(asset);
   if (!position) {
-    $("#weekPositionPanel").innerHTML = `<div class="empty-state">52-week position unavailable from current provider.</div>`;
+    $("#weekPositionPanel").innerHTML = `<div class="empty-state">52-week position is not available for this asset.</div>`;
     return;
   }
   $("#weekPositionPanel").innerHTML = `
@@ -1109,10 +1094,10 @@ function renderWeekPosition(asset) {
 
 function renderEarningsCatalyst(asset, research) {
   const earningsUnavailable = !asset.nextEarningsDate && asset.earningsSurprise === null;
-  $("#earningsStatus").textContent = earningsUnavailable ? "Earnings data unavailable from provider" : "Provider earnings data";
+  $("#earningsStatus").textContent = earningsUnavailable ? "Earnings data unavailable" : "Current earnings context";
   const rows = [
-    metricCatalyst("Next earnings date", asset.nextEarningsDate ? displayDate(asset.nextEarningsDate) : "Earnings data unavailable from provider.", asset, "nextEarningsDate"),
-    metricCatalyst("Recent earnings surprise", asset.earningsSurprise !== null ? percent(asset.earningsSurprise) : "Earnings data unavailable from provider.", asset, "earningsSurprise"),
+    metricCatalyst("Next earnings date", asset.nextEarningsDate ? displayDate(asset.nextEarningsDate) : "Earnings date unavailable.", asset, "nextEarningsDate"),
+    metricCatalyst("Recent earnings surprise", asset.earningsSurprise !== null ? percent(asset.earningsSurprise) : "Earnings surprise unavailable.", asset, "earningsSurprise"),
     metricCatalyst("Major catalyst", research.catalysts[0] || "Catalyst unavailable from returned data.", asset, "news"),
     metricCatalyst("Main risk catalyst", research.risks[0] || "Risk catalyst unavailable from returned data.", asset, "news")
   ];
@@ -1137,7 +1122,7 @@ function renderNews(asset) {
   const score = newsScore(asset.news);
   $("#newsScoreLabel").textContent = asset.news?.length ? `News tone: ${qualitativeFactor("newsSentiment", score)}` : "No recent news returned";
   if (!asset.news?.length) {
-    $("#newsList").innerHTML = `<div class="empty-state">No recent news was returned by the active provider. News is treated as neutral and cannot overpower fundamentals.</div>`;
+    $("#newsList").innerHTML = `<div class="empty-state">No recent company news is available. News remains neutral in the investment framework.</div>`;
     return;
   }
   $("#newsList").innerHTML = asset.news.slice(0, 5).map((item) => {
@@ -1150,7 +1135,7 @@ function renderNews(asset) {
           <span class="sentiment">${item.sentiment}</span>
         </div>
         <a href="${item.url || "#"}" target="_blank" rel="noreferrer">${item.headline}</a>
-        <p class="explanation">${item.summary || "No summary returned by the provider."}</p>
+        <p class="explanation">${item.summary || "No article summary is available."}</p>
         ${relevance ? `<small class="news-relevance">${relevance}</small>` : ""}
       </article>
     `;
@@ -1173,16 +1158,16 @@ async function runSearch() {
     sector: $("#sectorFilter").value.trim(),
     exchange: $("#exchangeFilter").value.trim()
   };
-  $("#searchMessage").textContent = "Searching live provider...";
+  $("#searchMessage").textContent = "Searching the market universe...";
   try {
     const response = await marketApi.search(query, filters);
     renderSearchResults(response.results);
     $("#searchMessage").textContent = response.warning
-      ? `Search provider is rate-limited or unavailable. Showing fallback results.`
-      : `${response.results.length} results from ${response.provider}. Live search is primary; fallback metadata is labeled.`;
+      ? "Market search is temporarily limited. Showing available reference results."
+      : `${response.results.length} market result${response.results.length === 1 ? "" : "s"}.`;
   } catch (error) {
     $("#searchMessage").textContent = friendlyError(error.message);
-    renderSearchResults(EXAMPLE_ASSETS.slice(0, 12).map((symbol) => ({ symbol, name: symbol, assetType: "Fallback", exchange: "Example", sector: "Example", industry: "Fallback", isLiveSearch: false })));
+    renderSearchResults(EXAMPLE_ASSETS.slice(0, 12).map((symbol) => ({ symbol, name: symbol, assetType: "Reference", exchange: "Popular assets", sector: "", industry: "", isLiveSearch: false })));
   }
 }
 
@@ -1195,7 +1180,7 @@ function renderSearchResults(results) {
     <div class="search-result">
       <div>
         <strong>${asset.symbol} - ${asset.name}</strong>
-        <span>${asset.assetType} / ${asset.exchange} / ${asset.sector || "Sector unknown"} / ${asset.industry || "Industry unknown"} / ${asset.isLiveSearch ? "Live search" : "Fallback catalog"}</span>
+        <span>${asset.assetType} / ${asset.exchange} / ${asset.sector || "Sector unknown"} / ${asset.industry || "Industry unknown"}</span>
       </div>
       <div class="search-actions">
         <button type="button" data-action="analyze" data-symbol="${asset.symbol}">Analyze</button>
@@ -1234,8 +1219,10 @@ async function renderComparison(force = false) {
     const ranked = [...scored].sort((a, b) => b.score.overall - a.score.overall);
     const best = ranked[0];
     const second = ranked[1];
+    const bestValuationView = qualitativeFactor("valuation", best.score.categories.valuation).toLowerCase();
+    const valuationArticle = /^[aeiou]/.test(bestValuationView) ? "an" : "a";
     $("#comparisonSummary").textContent = second
-      ? `${best.asset.symbol} presents the strongest overall research profile in this group, led by ${best.score.factors.strongest[0].toLowerCase()} and a ${qualitativeFactor("valuation", best.score.categories.valuation).toLowerCase()} valuation view. ${second.asset.symbol} remains more constrained by ${second.score.factors.weakest[0].toLowerCase()}. Relative conclusions should be read alongside growth, risk, and portfolio fit.`
+      ? `${best.asset.symbol} presents the strongest overall research profile in this group, led by ${best.score.factors.strongest[0].toLowerCase()} and ${valuationArticle} ${bestValuationView} valuation view. ${second.asset.symbol} remains more constrained by ${second.score.factors.weakest[0].toLowerCase()}. Relative conclusions should be read alongside growth, risk, and portfolio fit.`
       : `${best.asset.symbol} is selected. Add another asset for a relative conclusion.`;
     renderComparisonWinners(scored);
     $("#comparisonTable").innerHTML = comparisonTable(scored);
@@ -1279,7 +1266,6 @@ function comparisonTable(scored) {
     ["Valuation view", ...scored.map(({ score }) => qualitativeFactor("valuation", score.categories.valuation))],
     ["Growth view", ...scored.map(({ score }) => qualitativeFactor("growth", score.categories.growth))],
     ["Risk view", ...scored.map(({ score }) => qualitativeFactor("risk", score.categories.risk))],
-    ["Confidence", ...scored.map(({ score }) => score.confidence.level)],
     ["Verdict", ...scored.map(({ score }) => score.verdict)]
   ];
   return `<thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody>`;
@@ -1587,7 +1573,7 @@ function renderTradeImpact(asset) {
   $("#tradeImpactResult").innerHTML = `
     <strong>${asset.symbol} trade impact</strong>
     <p class="explanation">Adding ${money(tradeValue, asset.currency)} would move ${asset.sector} exposure from ${beforeSector.toFixed(1)}% to ${afterSector.toFixed(1)}% and ${direction} diversification (${beforeScore}/100 to ${afterScore}/100).</p>
-    <small class="metric-source">${afterSector > 45 ? `Concentration risk rises because ${asset.sector} would exceed 45%.` : "Trade impact is estimated from simulated holdings and current provider prices."}</small>
+    <small class="metric-source">${afterSector > 45 ? `Concentration risk rises because ${asset.sector} would exceed 45%.` : "Trade impact is estimated from simulated holdings and current market prices."}</small>
   `;
 }
 

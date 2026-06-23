@@ -22,7 +22,7 @@
           <button class="nav-tab active" data-tab="analysis" type="button">Analysis</button>
           <button class="nav-tab" data-tab="comparison" type="button">Compare</button>
           <button class="nav-tab" data-tab="portfolio" type="button">Portfolio</button>
-          <button class="nav-tab" data-tab="data" type="button">Data</button>
+          <button class="nav-tab" data-tab="data" type="button">Methodology</button>
         </nav>
 
         <section class="side-card">
@@ -54,20 +54,20 @@
           </div>
           <div class="status-stack">
             <div class="data-status" id="providerStatus">
-              <span id="providerLabel">Connecting to market data</span>
+              <span id="providerLabel">Market data connecting</span>
               <small id="lastUpdated">Waiting for first update</small>
             </div>
             <div class="status-actions">
               <button id="refreshButton" type="button">Refresh</button>
               <label class="mode-toggle"><input id="beginnerToggle" type="checkbox" /> Explain simply</label>
-              <span id="marketState">Status unknown</span>
+              <span id="marketState">Research workspace</span>
             </div>
           </div>
           <nav class="mobile-tabs nav-tabs" aria-label="Mobile primary">
             <button class="nav-tab active" data-tab="analysis" type="button">Analysis</button>
             <button class="nav-tab" data-tab="comparison" type="button">Compare</button>
             <button class="nav-tab" data-tab="portfolio" type="button">Portfolio</button>
-            <button class="nav-tab" data-tab="data" type="button">Data</button>
+            <button class="nav-tab" data-tab="data" type="button">Methodology</button>
           </nav>
         </header>
 
@@ -83,29 +83,21 @@
                   <div class="asset-tags" id="assetTags"></div>
                 </div>
                 <div class="verdict-stack">
-                  <div class="verdict-badge" id="companyVerdict">View pending</div>
-                  <span id="confidenceBadge" class="confidence-badge">Confidence pending</span>
-                  <span id="dataQualityBadge" class="confidence-badge">Coverage pending</span>
+                  <div class="verdict-badge" id="companyVerdict">Investment View pending</div>
                 </div>
               </div>
               <div class="price-line">
                 <strong id="stockPrice">Unavailable</strong>
                 <span id="dailyMove">Daily move unavailable</span>
               </div>
-              <div class="trust-strip" id="trustStrip">
-                <div><span>Provider</span><strong>Connecting</strong></div>
-                <div><span>Updated</span><strong>Pending</strong></div>
-                <div><span>Coverage</span><strong>Pending</strong></div>
-                <div><span>Confidence</span><strong>Pending</strong></div>
-                <div><span>Main source</span><strong>Pending</strong></div>
-              </div>
+              <div class="asset-context" id="trustStrip"></div>
               <div class="asset-actions">
                 <button id="watchlistToggle" type="button">Add to watchlist</button>
                 <button type="button" data-tab-jump="comparison">Compare this asset</button>
               </div>
               <details class="data-details">
-                <summary>Data details</summary>
-                <p class="asset-source" id="assetSource">Provider details pending.</p>
+                <summary>Research diagnostics</summary>
+                <p class="asset-source" id="assetSource">Field diagnostics pending.</p>
                 <div id="dataDetailsPanel" class="data-details-panel"></div>
               </details>
             </article>
@@ -143,7 +135,7 @@
               <div id="searchResults" class="search-results" aria-live="polite"></div>
             </form>
             <div>
-              <p class="eyebrow">Trending examples</p>
+              <p class="eyebrow">Market shortcuts</p>
               <div class="quick-picks" id="quickPicks"></div>
             </div>
           </section>
@@ -180,7 +172,6 @@
                 <span id="standaloneScore">View pending</span>
               </div>
               <p id="verdictExplanation" class="explanation"></p>
-              <div class="confidence-note" id="confidenceNote"></div>
               <div class="data-quality" id="dataQualityPanel"></div>
               <div class="factor-grid" id="scoreBars"></div>
               <div class="analyst-grid" id="analystReportGrid"></div>
@@ -207,7 +198,7 @@
             <article class="panel">
               <div class="panel-title">
                 <h2>Earnings Catalyst</h2>
-                <span id="earningsStatus">Checking provider</span>
+                <span id="earningsStatus">Reviewing earnings data</span>
               </div>
               <div class="research-grid" id="earningsCatalystGrid"></div>
             </article>
@@ -295,7 +286,7 @@
             <article class="panel">
               <div class="panel-title">
                 <h2>Add Simulated Holding</h2>
-                <span>Uses current provider price when available</span>
+                <span>Uses the current market price when available</span>
               </div>
               <form id="holdingForm" class="holding-form">
                 <label>Symbol<input id="holdingTicker" list="symbolList" placeholder="AAPL, SPY, BTC-USD..." /></label>
@@ -358,27 +349,22 @@
         <section id="data" class="tab-panel">
           <article class="panel">
             <div class="panel-title">
-              <h2>Market Data Layer</h2>
-              <span>Live first, unavailable when not returned</span>
+              <h2>Research Methodology</h2>
+              <span>How Aurex structures investment evidence</span>
             </div>
             <div class="data-grid">
               <div>
-                <h3>Primary Provider</h3>
-                <p id="dataModeCopy">The server uses a Yahoo-compatible search/chart provider by default and can be swapped for keyed providers.</p>
+                <h3>Fundamental Framework</h3>
+                <p id="dataModeCopy">Investment views integrate valuation, growth, profitability, balance-sheet strength, risk, and recent market context.</p>
               </div>
               <div>
-                <h3>Provider Interface</h3>
-                <p>Providers expose <code>search</code>, <code>getAsset</code>, <code>getBatch</code>, <code>getHistory</code>, and <code>getNews</code>. Finnhub and Alpha Vantage adapters are included; Polygon and Twelve Data can follow the same contract.</p>
+                <h3>Coverage Policy</h3>
+                <p>Unavailable fields remain clearly identified. Aurex does not substitute synthetic fundamentals for missing reported data.</p>
               </div>
               <div>
                 <h3>Asset Universe</h3>
-                <p>Search calls the active provider first for stocks, ETFs, REITs, ADRs, international listings, index funds where supported, and crypto pairs where supported.</p>
+                <p>Research coverage includes equities, ETFs, REITs, ADRs, international listings, index funds, and major digital assets where market information is available.</p>
               </div>
-            </div>
-            <div class="provider-code">
-              <code>MARKET_PROVIDER=yahoo npm start</code>
-              <code>FINNHUB_API_KEY=... MARKET_PROVIDER=finnhub npm start</code>
-              <code>ALPHA_VANTAGE_API_KEY=... MARKET_PROVIDER=alphavantage npm start</code>
             </div>
           </article>
         </section>
